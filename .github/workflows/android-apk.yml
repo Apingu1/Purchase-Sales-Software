@@ -5,6 +5,9 @@ on:
     branches:
       - main
       - feature/android-v1-complete
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
