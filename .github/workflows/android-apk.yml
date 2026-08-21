@@ -1,0 +1,67 @@
+name: Android APK
+
+on:
+  push:
+    branches:
+      - main
+      - feature/android-v1-complete
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Detect Android project
+        id: project
+        shell: bash
+        run: |
+          if [ -f app/build.gradle.kts ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "Android project not present on this ref; CI bootstrap only."
+          fi
+
+      - name: Set up Java 17
+        if: steps.project.outputs.present == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        if: steps.project.outputs.present == 'true'
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        if: steps.project.outputs.present == 'true'
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        if: steps.project.outputs.present == 'true'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Build debug APK
+        if: steps.project.outputs.present == 'true'
+        run: gradle --no-daemon :app:assembleDebug
+
+      - name: Upload installable APK
+        if: steps.project.outputs.present == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Purchase-Sales-Software-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
