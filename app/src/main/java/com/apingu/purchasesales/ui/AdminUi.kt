@@ -1,0 +1,140 @@
+package com.apingu.purchasesales.ui
+
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.navigation.NavHostController
+import com.apingu.purchasesales.data.*
+import com.apingu.purchasesales.util.*
+import java.time.LocalDate
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CustomersScreen(vm: AppViewModel, nav: NavHostController) {
+    val customers by vm.customers.collectAsStateWithLifecycle()
+    var edit by remember { mutableStateOf<CustomerEntity?>(null) }
+    var newDialog by remember { mutableStateOf(false) }
+    Scaffold(topBar = { TopAppBar(title = { Text("Customers") }, navigationIcon = { IconButton({ nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } }) }, floatingActionButton = { FloatingActionButton({ newDialog = true }) { Icon(Icons.Default.Add, null) } }) { inner ->
+        if (customers.isEmpty()) Box(Modifier.padding(inner).fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState("Create customers for sales invoices") }
+        else LazyColumn(Modifier.padding(inner), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(customers, key = { it.id }) { c -> ElevatedCard(Modifier.fillMaxWidth(), onClick = { edit = c }) { Row(Modifier.padding(16.dp).fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(c.companyName, fontWeight = FontWeight.SemiBold); Text("Invoice code ${c.invoiceCode}", style = MaterialTheme.typography.bodySmall) }; Icon(Icons.Default.ChevronRight, null) } } } }
+    }
+    if (newDialog) CustomerDialog(null, { newDialog = false }) { vm.saveCustomer(it) { newDialog = false } }
+    edit?.let { c -> CustomerDialog(c, { edit = null }) { vm.saveCustomer(it) { edit = null } } }
+}
+
+@Composable
+private fun CustomerDialog(existing: CustomerEntity?, onDismiss: () -> Unit, onSave: (CustomerEntity) -> Unit) {
+    var name by remember(existing?.id) { mutableStateOf(existing?.companyName.orEmpty()) }
+    var code by remember(existing?.id) { mutableStateOf(existing?.invoiceCode.orEmpty()) }
+    var address by remember(existing?.id) { mutableStateOf(existing?.address.orEmpty()) }
+    var email by remember(existing?.id) { mutableStateOf(existing?.email.orEmpty()) }
+    var phone by remember(existing?.id) { mutableStateOf(existing?.phone.orEmpty()) }
+    var vat by remember(existing?.id) { mutableStateOf(existing?.vatNumber.orEmpty()) }
+    var company by remember(existing?.id) { mutableStateOf(existing?.companyNumber.orEmpty()) }
+    var notes by remember(existing?.id) { mutableStateOf(existing?.notes.orEmpty()) }
+    AlertDialog(onDismissRequest = onDismiss, title = { Text(if (existing == null) "New customer" else "Edit customer") }, text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(7.dp)) { FormField("Company / customer name", name, { name = it }); FormField("Invoice code (2–5 chars)", code, { code = it.uppercase().take(5) }); FormField("Billing address", address, { address = it }, singleLine = false); FormField("Email", email, { email = it }); FormField("Phone", phone, { phone = it }); FormField("VAT number", vat, { vat = it }); FormField("Company number", company, { company = it }); FormField("Notes", notes, { notes = it }, singleLine = false) } }, confirmButton = { TextButton({ onSave(CustomerEntity(existing?.id ?: 0L, name, code, address, email, phone, vat, company, notes)) }) { Text("Save") } }, dismissButton = { TextButton(onDismiss) { Text("Cancel") } })
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ExpensesScreen(vm: AppViewModel, nav: NavHostController) {
+    val expenses by vm.expenses.collectAsStateWithLifecycle()
+    Scaffold(topBar = { TopAppBar(title = { Text("Expenses") }, navigationIcon = { IconButton({ nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } }) }, floatingActionButton = { FloatingActionButton({ nav.navigate("expense/new") }) { Icon(Icons.Default.Add, null) } }) { inner ->
+        if (expenses.isEmpty()) Box(Modifier.padding(inner).fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState("No expenses recorded") }
+        else LazyColumn(Modifier.padding(inner), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(expenses, key = { it.id }) { e -> ElevatedCard(Modifier.fillMaxWidth(), onClick = { nav.navigate("expense/${e.id}") }) { Column(Modifier.padding(14.dp)) { Row(Modifier.fillMaxWidth()) { Text(e.details, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); Text(formatMoney(e.grossPence), fontWeight = FontWeight.Bold) }; Text("${e.supplier} • ${displayDate(e.expenseDateEpochDay)} • ${VatTypes.label(e.vatType)}", style = MaterialTheme.typography.bodySmall) } } } }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ExpenseEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
+    val expenses by vm.expenses.collectAsStateWithLifecycle()
+    val e = expenses.firstOrNull { it.id == id }
+    if (id > 0 && e == null) { LoadingScreen(); return }
+    var date by remember(e?.id) { mutableStateOf(editDate(e?.expenseDateEpochDay ?: epochDayToday())) }
+    var supplier by remember(e?.id) { mutableStateOf(e?.supplier.orEmpty()) }
+    var details by remember(e?.id) { mutableStateOf(e?.details.orEmpty()) }
+    var account by remember(e?.id) { mutableStateOf(e?.account.orEmpty()) }
+    var gross by remember(e?.id) { mutableStateOf(e?.grossPence?.let(::formatMoneyPlain).orEmpty()) }
+    var vatType by remember(e?.id) { mutableStateOf(e?.vatType ?: VatTypes.STANDARD) }
+    var payment by remember(e?.id) { mutableStateOf(e?.paymentMethod.orEmpty()) }
+    var comments by remember(e?.id) { mutableStateOf(e?.comments.orEmpty()) }
+    var attachment by remember { mutableStateOf<Uri?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { attachment = it }
+    val b = breakdownFromGross(runCatching { moneyToPence(gross) }.getOrDefault(0), vatType)
+    ScreenScaffold(if (id == 0L) "New expense" else "Edit expense", onBack = { nav.popBackStack() }) { inner -> Column(Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        FormField("Date", date, { date = it }); FormField("Store / supplier", supplier, { supplier = it }); FormField("Details", details, { details = it }); FormField("Account / category", account, { account = it }); FormField("Gross total (£)", gross, { gross = it }, KeyboardType.Decimal); VatSelector(vatType) { vatType = it }; Text("Net ${formatMoney(b.netPence)} • VAT ${formatMoney(b.vatPence)}", style = MaterialTheme.typography.bodySmall); FormField("Payment method", payment, { payment = it }); FormField("Comments", comments, { comments = it }, singleLine = false); OutlinedButton({ picker.launch("*/*") }, Modifier.fillMaxWidth()) { Icon(Icons.Default.AttachFile, null); Text(if (attachment != null) " Receipt selected" else if (!e?.attachmentPath.isNullOrBlank()) " Replace receipt/invoice" else " Attach receipt/invoice") }; Button({ vm.saveExpense(ExpenseDraft(id, parseDateOrToday(date), supplier, details, account, runCatching { moneyToPence(gross) }.getOrDefault(0), vatType, payment, comments, e?.attachmentPath), attachment) { nav.popBackStack() } }, Modifier.fillMaxWidth()) { Text("Save expense") }; Spacer(Modifier.height(20.dp))
+    } }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ReportsScreen(vm: AppViewModel, nav: NavHostController) {
+    val s by vm.summary.collectAsStateWithLifecycle()
+    val excelLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) { it?.let(vm::exportExcel) }
+    ScreenScaffold("Profit & VAT", onBack = { nav.popBackStack() }) { inner -> LazyColumn(Modifier.padding(inner), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { MetricCard("Net sales", formatMoney(s.salesNet), Modifier.fillMaxWidth()) }; item { MetricCard("Cost of goods sold", formatMoney(s.cogsNet), Modifier.fillMaxWidth()) }; item { MetricCard("Gross profit", formatMoney(s.grossProfit), Modifier.fillMaxWidth()) }; item { MetricCard("Expenses", formatMoney(s.expensesNet), Modifier.fillMaxWidth()) }; item { MetricCard("Net trading profit", formatMoney(s.netProfit), Modifier.fillMaxWidth()) }
+        item { HorizontalDivider(); Text("VAT analysis", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
+        item { ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) { ReportLine("Output VAT on sales", s.outputVat); ReportLine("Recoverable purchase/expense VAT", s.inputVat); ReportLine("Reverse VAT output (notional)", s.reverseOutputVat); ReportLine("Reverse VAT input (notional)", -s.reverseInputVat); HorizontalDivider(); ReportLine(if (s.vatPosition >= 0) "VAT due to HMRC" else "VAT refund expected", kotlin.math.abs(s.vatPosition), true) } } }
+        item { Button({ excelLauncher.launch("Business_Records.xlsx") }, Modifier.fillMaxWidth()) { Icon(Icons.Default.TableView, null); Text(" Export accounting-period Excel") } }
+    } }
+}
+
+@Composable private fun ReportLine(label: String, pence: Long, bold: Boolean = false) { Row(Modifier.fillMaxWidth()) { Text(label, Modifier.weight(1f), fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal); Text(formatMoney(pence), fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal) } }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun DocumentsScreen(vm: AppViewModel, nav: NavHostController) {
+    val business by vm.business.collectAsStateWithLifecycle()
+    val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { it?.let(vm::exportDocuments) }
+    val excelLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) { it?.let(vm::exportExcel) }
+    ScreenScaffold("Documents & Dropbox", onBack = { nav.popBackStack() }) { inner -> Column(Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) { Text("Bulk document export", fontWeight = FontWeight.SemiBold); Text("Copies all attached purchase invoices, generated sales invoices and expense receipts to a folder you choose.", style = MaterialTheme.typography.bodySmall); Spacer(Modifier.height(10.dp)); Button({ treeLauncher.launch(null) }) { Icon(Icons.Default.FolderOpen, null); Text(" Choose folder & export") } } }
+        ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) { Text("Excel", fontWeight = FontWeight.SemiBold); Text("Generates PUR, SALES, EXPENSES and PROFIT & VAT sheets for your accounting period.", style = MaterialTheme.typography.bodySmall); Spacer(Modifier.height(10.dp)); Button({ excelLauncher.launch("Business_Records.xlsx") }) { Icon(Icons.Default.Download, null); Text(" Export Excel") } } }
+        ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) { Text("Dropbox auto-sync", fontWeight = FontWeight.SemiBold); Text(if (business.dropboxAutoSync) "Enabled • ${business.dropboxRoot}" else "Disabled — configure in Business Details", style = MaterialTheme.typography.bodySmall); Spacer(Modifier.height(10.dp)); OutlinedButton({ vm.syncNow() }, enabled = business.dropboxAutoSync) { Icon(Icons.Default.CloudSync, null); Text(" Sync now") } } }
+        Text("Recovery sync maintains PURCHASES.txt, PENDING_PURCHASES.txt and INVENTORY.txt in Dropbox, plus a current Excel workbook and invoice/receipt copies.", style = MaterialTheme.typography.bodySmall)
+    } }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun BusinessScreen(vm: AppViewModel, nav: NavHostController) {
+    val b by vm.business.collectAsStateWithLifecycle()
+    var name by remember(b) { mutableStateOf(b.businessName) }; var address by remember(b) { mutableStateOf(b.address) }; var vat by remember(b) { mutableStateOf(b.vatNumber) }; var company by remember(b) { mutableStateOf(b.companyNumber) }; var email by remember(b) { mutableStateOf(b.email) }; var phone by remember(b) { mutableStateOf(b.phone) }; var bank by remember(b) { mutableStateOf(b.bankDetails) }; var terms by remember(b) { mutableStateOf(b.invoiceTerms) }; var footer by remember(b) { mutableStateOf(b.invoiceFooter) }; var start by remember(b) { mutableStateOf(if (b.accountingStartEpochDay > 0) editDate(b.accountingStartEpochDay) else editDate(LocalDate.now().withDayOfYear(1).toEpochDay())) }; var end by remember(b) { mutableStateOf(if (b.accountingEndEpochDay > 0) editDate(b.accountingEndEpochDay) else editDate(LocalDate.now().withMonth(12).withDayOfMonth(31).toEpochDay())) }; var dbToken by remember(b) { mutableStateOf(b.dropboxAccessToken) }; var dbKey by remember(b) { mutableStateOf(b.dropboxAppKey) }; var dbRefresh by remember(b) { mutableStateOf(b.dropboxRefreshToken) }; var dbRoot by remember(b) { mutableStateOf(b.dropboxRoot) }; var auto by remember(b) { mutableStateOf(b.dropboxAutoSync) }
+    ScreenScaffold("Business Details", onBack = { nav.popBackStack() }) { inner -> Column(Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        FormField("Business name", name, { name = it }); FormField("Business address", address, { address = it }, singleLine = false); FormField("VAT number", vat, { vat = it }); FormField("Company number", company, { company = it }); FormField("Email", email, { email = it }); FormField("Phone", phone, { phone = it }); FormField("Bank/payment details for invoices", bank, { bank = it }, singleLine = false); FormField("Invoice terms", terms, { terms = it }); FormField("Invoice footer", footer, { footer = it }, singleLine = false)
+        HorizontalDivider(); Text("Accounting period", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); FormField("Period start (DD/MM/YYYY)", start, { start = it }); FormField("Period end (DD/MM/YYYY)", end, { end = it })
+        HorizontalDivider(); Text("Dropbox", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); Text("Use an access token, or App Key + refresh token for persistent background sync.", style = MaterialTheme.typography.bodySmall); FormField("Dropbox access token", dbToken, { dbToken = it }); FormField("Dropbox App Key (optional)", dbKey, { dbKey = it }); FormField("Dropbox refresh token (optional)", dbRefresh, { dbRefresh = it }); FormField("Dropbox root folder", dbRoot, { dbRoot = it }); Row(verticalAlignment = Alignment.CenterVertically) { Switch(auto, { auto = it }); Spacer(Modifier.width(10.dp)); Text("Automatic Dropbox sync") }
+        Button({ vm.saveBusiness(BusinessEntity(1, name, address, vat, company, email, phone, bank, terms, footer, parseDateOrToday(start), parseDateOrToday(end), dbToken, dbKey, dbRefresh, dbRoot, auto)) { nav.popBackStack() } }, Modifier.fillMaxWidth()) { Icon(Icons.Default.Save, null); Text(" Save business details") }; Spacer(Modifier.height(20.dp))
+    } }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun MoreScreen(nav: NavHostController) {
+    ScreenScaffold("More") { inner -> LazyColumn(Modifier.padding(inner), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { MoreRow(Icons.Default.People, "Customers", "Saved customer cards and invoice codes") { nav.navigate("customers") } }
+        item { MoreRow(Icons.Default.Payments, "Expenses", "Expenses and receipt attachments") { nav.navigate("expenses") } }
+        item { MoreRow(Icons.Default.Assessment, "Profit & VAT", "Profit, VAT due/refund and accounting-period export") { nav.navigate("reports") } }
+        item { MoreRow(Icons.Default.FolderCopy, "Documents & Dropbox", "Bulk invoice export, Excel and cloud sync") { nav.navigate("documents") } }
+        item { MoreRow(Icons.Default.Business, "Business Details", "Company data, accounting period and Dropbox") { nav.navigate("business") } }
+    } }
+}
+
+@Composable
+private fun MoreRow(icon: androidx.compose.ui.graphics.vector.ImageVector, title: String, subtitle: String, onClick: () -> Unit) { ElevatedCard(Modifier.fillMaxWidth(), onClick = onClick) { Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) { Icon(icon, null); Spacer(Modifier.width(14.dp)); Column(Modifier.weight(1f)) { Text(title, fontWeight = FontWeight.SemiBold); Text(subtitle, style = MaterialTheme.typography.bodySmall) }; Icon(Icons.Default.ChevronRight, null) } } }
