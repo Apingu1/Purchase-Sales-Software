@@ -84,3 +84,5 @@ The artifact contains `app-debug.apk`, which can be downloaded to and installed 
 The app intentionally has no FEFO/expiry logic, no supplier master-data module, no roles/users and no conventional backup/restore UI in V1.
 
 Build branch: `feature/android-v1-complete`.
+
+CI status: GitHub Actions builds the installable APK from this branch.
