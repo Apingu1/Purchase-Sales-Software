@@ -81,6 +81,8 @@ data class PurchaseEntity(
     val returnedQty: Int = 0,
     val refundExpectedPence: Long = 0,
     val refundReceivedPence: Long = 0,
+    @ColumnInfo(defaultValue = "0") val partialRefundNetPence: Long = 0,
+    @ColumnInfo(defaultValue = "0") val partialRefundVatPence: Long = 0,
     val invoicePath: String? = null,
     val notes: String = "",
     val updatedAtMillis: Long = System.currentTimeMillis()
@@ -232,7 +234,7 @@ interface AppDao {
         SaleEntity::class, SaleLineEntity::class, SaleAllocationEntity::class,
         SaleReturnEntity::class, SaleReturnAllocationEntity::class, ExpenseEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -271,10 +273,17 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `purchases` ADD COLUMN `partialRefundNetPence` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `purchases` ADD COLUMN `partialRefundVatPence` INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder(
             context.applicationContext,
             AppDatabase::class.java,
             "purchase-sales.db"
-        ).addMigrations(MIGRATION_1_2).fallbackToDestructiveMigration().build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).fallbackToDestructiveMigration().build()
     }
 }
