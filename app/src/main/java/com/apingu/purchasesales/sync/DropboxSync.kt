@@ -151,6 +151,13 @@ private fun purchasesDump(items: List<com.apingu.purchasesales.data.PurchaseEnti
         appendLine("STATUS: ${p.status}")
         appendLine("RECEIVED: ${p.receivedQty} | CANCELLED: ${p.cancelledQty} | RETURNED: ${p.returnedQty}")
         appendLine("REFUND EXPECTED: ${formatMoney(p.refundExpectedPence)} | REFUND RECEIVED: ${formatMoney(p.refundReceivedPence)}")
+        if (p.partialRefund) {
+            appendLine("PARTIAL REFUND / PRICE ADJUSTMENT: YES")
+            appendLine("REFUND NET: ${formatMoney(p.refundNetPence)} | REFUND VAT: ${formatMoney(p.refundVatPence)} | REFUND TOTAL: ${formatMoney(p.refundNetPence + p.refundVatPence)}")
+            appendLine("EFFECTIVE PURCHASE NET COST: ${formatMoney(effectivePurchaseNetPence(p))}")
+        } else if (p.refundExpectedPence > 0) {
+            appendLine("REFUND BREAKDOWN: NET ${formatMoney(p.refundNetPence)} | VAT ${formatMoney(p.refundVatPence)}")
+        }
         appendLine("INVOICE ATTACHED: ${if (p.invoicePath.isNullOrBlank()) "NO" else "YES"}")
         if (p.notes.isNotBlank()) appendLine("NOTES: ${p.notes}")
         appendLine("------------------------------------------------------------")
