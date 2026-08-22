@@ -83,14 +83,19 @@ object InvoicePdf {
         if (business.companyNumber.isNotBlank()) text("Company No: ${business.companyNumber}", 40f, 102f, 9f)
         text("Invoice: ${sale.invoiceNo}", 395f, 78f, 10f, true)
         text("Date: ${displayDate(sale.saleDateEpochDay)}", 395f, 94f, 10f)
+        if (sale.vatType == VatTypes.REVERSE) {
+            paint.color = android.graphics.Color.RED
+            text("THIS INVOICE IS SUBJECT TO REVERSE CHARGE VAT", 40f, 120f, 11f, true)
+            paint.color = android.graphics.Color.BLACK
+        }
 
-        text("Bill to", 40f, 135f, 10f, true)
-        text(customer.companyName, 40f, 151f, 11f, true)
-        var cy = 166f
+        text("Bill to", 40f, 145f, 10f, true)
+        text(customer.companyName, 40f, 161f, 11f, true)
+        var cy = 176f
         customer.address.lines().filter { it.isNotBlank() }.take(4).forEach { text(it, 40f, cy, 9f); cy += 13f }
         if (customer.vatNumber.isNotBlank()) { text("VAT No: ${customer.vatNumber}", 40f, cy, 9f); cy += 13f }
 
-        var y = 225f
+        var y = 235f
         paint.strokeWidth = 1f
         canvas.drawLine(40f, y, 555f, y, paint)
         y += 18f
@@ -113,7 +118,11 @@ object InvoicePdf {
         text("VAT", 390f, y, 10f); text(formatMoney(sale.vatPence), 490f, y, 10f, true); y += 18f
         text("TOTAL", 390f, y, 12f, true); text(formatMoney(sale.grossPence), 490f, y, 12f, true); y += 26f
         when (sale.vatType) {
-            VatTypes.REVERSE -> text("Reverse charge: customer to account for VAT. VAT charged on this invoice: £0.00", 40f, y, 9f, true)
+            VatTypes.REVERSE -> {
+                paint.color = android.graphics.Color.RED
+                text("Reverse charge applies - customer to account for VAT. VAT charged: £0.00", 40f, y, 9f, true)
+                paint.color = android.graphics.Color.BLACK
+            }
             VatTypes.NO_VAT -> text("No VAT charged on this invoice.", 40f, y, 9f)
         }
         y += 22f
