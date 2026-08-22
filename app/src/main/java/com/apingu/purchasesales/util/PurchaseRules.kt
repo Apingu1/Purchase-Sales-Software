@@ -3,8 +3,8 @@ package com.apingu.purchasesales.util
 import com.apingu.purchasesales.data.PurchaseEntity
 
 /**
- * A true voided purchase line: all ordered units were cancelled and the expected supplier refund
- * has been received in full. Partial price adjustments deliberately never qualify.
+ * A true voided purchase line for accounting export: all ordered units were cancelled and the
+ * expected supplier refund has been received in full. Partial price adjustments never qualify.
  */
 fun isCancelledAndFullyRefundedPurchase(purchase: PurchaseEntity): Boolean =
     !purchase.partialRefund &&
@@ -14,8 +14,20 @@ fun isCancelledAndFullyRefundedPurchase(purchase: PurchaseEntity): Boolean =
         purchase.refundReceivedPence >= purchase.refundExpectedPence
 
 /**
- * Used for document cleanup. A supplier invoice is order-level, so it is only removed from Dropbox
- * when every line on that purchase order has been cancelled and fully refunded.
+ * Used for Dropbox document cleanup. An order line is financially/physically closed when every
+ * unit was either cancelled before receipt or returned after receipt, and the supplier refund is
+ * complete. This intentionally excludes partial monetary refunds where the item is retained.
+ */
+private fun isClosedAndFullyRefundedPurchase(purchase: PurchaseEntity): Boolean =
+    !purchase.partialRefund &&
+        purchase.quantity > 0 &&
+        purchase.cancelledQty + purchase.returnedQty >= purchase.quantity &&
+        purchase.refundExpectedPence > 0 &&
+        purchase.refundReceivedPence >= purchase.refundExpectedPence
+
+/**
+ * A supplier invoice belongs to the whole order, so Dropbox removes it only when every line is
+ * closed and fully refunded. Mixed orders keep the invoice for the remaining valid purchases.
  */
 fun isCancelledAndFullyRefundedOrder(lines: List<PurchaseEntity>): Boolean =
-    lines.isNotEmpty() && lines.all(::isCancelledAndFullyRefundedPurchase)
+    lines.isNotEmpty() && lines.all(::isClosedAndFullyRefundedPurchase)
