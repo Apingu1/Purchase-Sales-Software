@@ -40,11 +40,7 @@ data class CustomerEntity(
     val notes: String = ""
 )
 
-/**
- * Purchase/order header. One order can contain any number of PurchaseEntity line items.
- * The existing purchases table remains the stock/financial lot table so inventory,
- * FIFO costing and historical data continue to work at individual item-line level.
- */
+/** One supplier order header can contain any number of independently tracked purchase lines. */
 @Entity(tableName = "purchase_orders")
 data class PurchaseOrderEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -81,8 +77,9 @@ data class PurchaseEntity(
     val returnedQty: Int = 0,
     val refundExpectedPence: Long = 0,
     val refundReceivedPence: Long = 0,
-    @ColumnInfo(defaultValue = "0") val partialRefundNetPence: Long = 0,
-    @ColumnInfo(defaultValue = "0") val partialRefundVatPence: Long = 0,
+    @ColumnInfo(defaultValue = "0") val partialRefund: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val refundNetPence: Long = 0,
+    @ColumnInfo(defaultValue = "0") val refundVatPence: Long = 0,
     val invoicePath: String? = null,
     val notes: String = "",
     val updatedAtMillis: Long = System.currentTimeMillis()
@@ -275,8 +272,13 @@ abstract class AppDatabase : RoomDatabase() {
 
         private val MIGRATION_2_3 = object : Migration(2, 3) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE `purchases` ADD COLUMN `partialRefundNetPence` INTEGER NOT NULL DEFAULT 0")
-                db.execSQL("ALTER TABLE `purchases` ADD COLUMN `partialRefundVatPence` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `purchases` ADD COLUMN `partialRefund` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `purchases` ADD COLUMN `refundNetPence` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `purchases` ADD COLUMN `refundVatPence` INTEGER NOT NULL DEFAULT 0")
+                // Existing V2 refund records used an automatic gross split. Preserve that legacy result;
+                // users can edit the new explicit Net/VAT breakdown afterwards where the supplier credit differs.
+                db.execSQL("UPDATE `purchases` SET `refundNetPence` = CASE WHEN `refundExpectedPence` > 0 AND `vatType` = 'STANDARD' THEN CAST(ROUND(`refundExpectedPence` / 1.2) AS INTEGER) WHEN `refundExpectedPence` > 0 THEN `refundExpectedPence` ELSE 0 END")
+                db.execSQL("UPDATE `purchases` SET `refundVatPence` = CASE WHEN `refundExpectedPence` > 0 AND `vatType` = 'STANDARD' THEN `refundExpectedPence` - `refundNetPence` ELSE 0 END")
             }
         }
 
