@@ -53,9 +53,34 @@ jobs:
         with:
           gradle-version: '8.10.2'
 
+      - name: Prepare persistent update signing key
+        if: steps.project.outputs.present == 'true'
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/purchase-sales-signing"
+          base64 --decode ci-signing/purchase-sales-update.keystore.b64 > "$RUNNER_TEMP/purchase-sales-signing/purchase-sales-update.keystore"
+          echo "PURCHASE_SALES_KEYSTORE_PATH=$RUNNER_TEMP/purchase-sales-signing/purchase-sales-update.keystore" >> "$GITHUB_ENV"
+          echo "PURCHASE_SALES_KEYSTORE_PASSWORD=purchasesales-ci" >> "$GITHUB_ENV"
+          echo "PURCHASE_SALES_KEY_ALIAS=purchasesales" >> "$GITHUB_ENV"
+          echo "PURCHASE_SALES_KEY_PASSWORD=purchasesales-ci" >> "$GITHUB_ENV"
+
       - name: Build debug APK
         if: steps.project.outputs.present == 'true'
         run: gradle --no-daemon :app:assembleDebug
+
+      - name: Verify persistent APK signature
+        if: steps.project.outputs.present == 'true'
+        shell: bash
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs "$APK" | tee apk-signature.txt
+          ACTUAL=$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' apk-signature.txt | head -n 1 | tr '[:lower:]' '[:upper:]')
+          EXPECTED="9F66F2FCEEABC2A37B5327EA45B73E1C6262196DE53DE2772CB8034D86F1923D"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "Unexpected APK signing certificate: $ACTUAL"
+            exit 1
+          fi
+          echo "Persistent signing certificate verified: $ACTUAL"
 
       - name: Upload installable APK
         if: steps.project.outputs.present == 'true'
