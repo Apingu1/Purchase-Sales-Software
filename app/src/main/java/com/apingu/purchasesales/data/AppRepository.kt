@@ -26,7 +26,10 @@ data class PurchaseDraft(
     val refundExpectedPence: Long,
     val refundReceivedPence: Long,
     val notes: String,
-    val existingInvoicePath: String? = null
+    val existingInvoicePath: String? = null,
+    val partialRefund: Boolean = false,
+    val refundNetPence: Long = 0,
+    val refundVatPence: Long = 0
 )
 
 data class PurchaseItemDraft(
@@ -38,7 +41,10 @@ data class PurchaseItemDraft(
     val cancelledQty: Int = 0,
     val returnedQty: Int = 0,
     val refundExpectedPence: Long = 0,
-    val refundReceivedPence: Long = 0
+    val refundReceivedPence: Long = 0,
+    val partialRefund: Boolean = false,
+    val refundNetPence: Long = 0,
+    val refundVatPence: Long = 0
 )
 
 data class PurchaseOrderDraft(
@@ -124,6 +130,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
      * Saves one purchase/order header and all of its item lines atomically.
      * Each PurchaseEntity remains an independent inventory lot so different items in the same
      * supplier order can be received/cancelled/returned independently and keep their own cost.
+     * A partial monetary refund is independent of quantity returns and can have an explicit net/VAT split.
      */
     suspend fun savePurchaseOrder(draft: PurchaseOrderDraft, attachmentUri: Uri? = null): Long {
         require(draft.supplier.isNotBlank()) { "Supplier/store is required" }
@@ -165,7 +172,6 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
 
             val allAllocations = dao.getSaleAllocations()
             val allReturnAllocations = dao.getSaleReturnAllocations()
-            val allocationById = allAllocations.associateBy { it.id }
 
             existingLines.filter { old -> old.id !in requestedIds }.forEach { old ->
                 require(allAllocations.none { it.purchaseId == old.id }) {
@@ -192,13 +198,16 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 }
 
                 val vat = breakdownFromGross(itemDraft.grossPence, draft.vatType)
+                val explicitRefundTotal = if (itemDraft.partialRefund) itemDraft.refundNetPence + itemDraft.refundVatPence else 0
+                val refundExpected = if (itemDraft.partialRefund) explicitRefundTotal else itemDraft.refundExpectedPence
+                val refundReceived = if (itemDraft.partialRefund) explicitRefundTotal else itemDraft.refundReceivedPence
                 val lineStatus = derivePurchaseStatus(
                     itemDraft.quantity,
                     itemDraft.receivedQty,
                     itemDraft.cancelledQty,
                     itemDraft.returnedQty,
-                    itemDraft.refundExpectedPence,
-                    itemDraft.refundReceivedPence
+                    refundExpected,
+                    refundReceived
                 )
                 val line = PurchaseEntity(
                     id = itemDraft.id,
@@ -219,10 +228,11 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                     receivedQty = itemDraft.receivedQty,
                     cancelledQty = itemDraft.cancelledQty,
                     returnedQty = itemDraft.returnedQty,
-                    refundExpectedPence = itemDraft.refundExpectedPence,
-                    refundReceivedPence = itemDraft.refundReceivedPence,
-                    // One physical supplier invoice belongs to the order. Keep a single line reference
-                    // for compatibility with the existing document exporter and Dropbox uploader.
+                    refundExpectedPence = refundExpected,
+                    refundReceivedPence = refundReceived,
+                    partialRefund = itemDraft.partialRefund,
+                    refundNetPence = if (itemDraft.partialRefund) itemDraft.refundNetPence else legacyRefundNet(refundExpected, draft.vatType),
+                    refundVatPence = if (itemDraft.partialRefund) itemDraft.refundVatPence else legacyRefundVat(refundExpected, draft.vatType),
                     invoicePath = if (index == 0) invoicePath else null,
                     notes = draft.notes.trim(),
                     updatedAtMillis = now
@@ -231,7 +241,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                     dao.updatePurchase(line)
                     line.id
                 }
-                val unitNet = if (itemDraft.quantity > 0) vat.netPence / itemDraft.quantity else 0
+                val effectiveNet = (vat.netPence - if (itemDraft.partialRefund) itemDraft.refundNetPence else 0).coerceAtLeast(0)
+                val unitNet = if (itemDraft.quantity > 0) effectiveNet / itemDraft.quantity else 0
                 dao.updateAllocationUnitCostForPurchase(lineId, unitNet)
             }
             savedOrderId
@@ -239,6 +250,12 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         enqueueSync()
         return orderId
     }
+
+    private fun legacyRefundNet(refundGrossPence: Long, vatType: String): Long =
+        if (refundGrossPence > 0) breakdownFromGross(refundGrossPence, vatType).netPence else 0
+
+    private fun legacyRefundVat(refundGrossPence: Long, vatType: String): Long =
+        if (refundGrossPence > 0) breakdownFromGross(refundGrossPence, vatType).vatPence else 0
 
     private fun validatePurchaseItem(item: PurchaseItemDraft) {
         require(item.item.isNotBlank()) { "Each purchase line needs an item" }
@@ -249,6 +266,14 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         require(item.cancelledQty <= item.quantity - item.receivedQty) { "Cancelled quantity exceeds the outstanding quantity for ${item.item}" }
         require(item.returnedQty <= item.receivedQty) { "Returned quantity cannot exceed received quantity for ${item.item}" }
         require(item.refundExpectedPence >= 0 && item.refundReceivedPence >= 0) { "Refund values cannot be negative" }
+        require(item.refundNetPence >= 0 && item.refundVatPence >= 0) { "Refund net/VAT values cannot be negative" }
+        if (item.partialRefund) {
+            require(item.refundNetPence + item.refundVatPence > 0) { "Enter the net and/or VAT amount of the partial refund for ${item.item}" }
+            val original = breakdownFromGross(item.grossPence, VatTypes.STANDARD)
+            require(item.refundNetPence <= item.grossPence) { "Partial refund net exceeds the purchase value for ${item.item}" }
+            require(item.refundVatPence <= original.vatPence || item.refundVatPence <= item.grossPence) { "Partial refund VAT exceeds the purchase value for ${item.item}" }
+            require(item.refundNetPence + item.refundVatPence <= item.grossPence) { "Partial refund exceeds the purchase value for ${item.item}" }
+        }
     }
 
     private fun derivePurchaseStatus(
@@ -283,7 +308,10 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             cancelledQty = draft.cancelledQty,
             returnedQty = draft.returnedQty,
             refundExpectedPence = draft.refundExpectedPence,
-            refundReceivedPence = draft.refundReceivedPence
+            refundReceivedPence = draft.refundReceivedPence,
+            partialRefund = draft.partialRefund,
+            refundNetPence = draft.refundNetPence,
+            refundVatPence = draft.refundVatPence
         )
         val itemDrafts = if (existing == null) listOf(replacement) else currentLines.map { line ->
             if (line.id == existing.id) replacement else PurchaseItemDraft(
@@ -295,7 +323,10 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 cancelledQty = line.cancelledQty,
                 returnedQty = line.returnedQty,
                 refundExpectedPence = line.refundExpectedPence,
-                refundReceivedPence = line.refundReceivedPence
+                refundReceivedPence = line.refundReceivedPence,
+                partialRefund = line.partialRefund,
+                refundNetPence = line.refundNetPence,
+                refundVatPence = line.refundVatPence
             )
         }
         val savedOrderId = savePurchaseOrder(
@@ -455,7 +486,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             val available = p.receivedQty - p.returnedQty - (soldByPurchase[p.id] ?: 0) + (restoredByPurchase[p.id] ?: 0)
             if (available <= 0) return@forEach
             val take = minOf(remaining, available)
-            val unitNetCost = if (p.quantity > 0) p.netPence / p.quantity else 0
+            val effectiveNet = (p.netPence - if (p.partialRefund) p.refundNetPence else 0).coerceAtLeast(0)
+            val unitNetCost = if (p.quantity > 0) effectiveNet / p.quantity else 0
             dao.insertSaleAllocation(SaleAllocationEntity(saleLineId = line.id, purchaseId = p.id, quantity = take, unitNetCostPence = unitNetCost))
             remaining -= take
         }
