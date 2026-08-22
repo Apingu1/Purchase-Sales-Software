@@ -16,6 +16,7 @@ import java.io.File
 
 class AppViewModel(app: Application, private val repo: AppRepository) : AndroidViewModel(app) {
     private val context: Context get() = getApplication<Application>().applicationContext
+    private val dao = (app as PurchaseSalesApplication).database.dao()
 
     val business = repo.business.map { it ?: BusinessEntity() }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), BusinessEntity())
     val customers = repo.customers.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -55,8 +56,37 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     fun saveCustomer(value: CustomerEntity, onSuccess: () -> Unit = {}) = action("Customer saved", onSuccess) { repo.addCustomer(value) }
     fun deleteCustomer(value: CustomerEntity) = action("Customer deleted") { repo.deleteCustomer(value) }
 
-    fun savePurchaseOrder(value: PurchaseOrderDraft, attachmentUri: Uri?, onSuccess: () -> Unit) =
-        action("Purchase saved", onSuccess) { repo.savePurchaseOrder(value, attachmentUri) }
+    /**
+     * Item notes are persisted on the underlying PurchaseEntity line after the existing order save.
+     * PurchaseEntity already has a notes field, so this adds line-level IMEI/serial traceability
+     * without a destructive schema change. PurchaseOrderEntity.notes remains the separate order note.
+     */
+    fun savePurchaseOrder(
+        value: PurchaseOrderDraft,
+        attachmentUri: Uri?,
+        itemNotes: List<String> = emptyList(),
+        onSuccess: () -> Unit
+    ) = action("Purchase saved", onSuccess) {
+        val orderId = repo.savePurchaseOrder(value, attachmentUri)
+        if (itemNotes.isNotEmpty()) persistPurchaseItemNotes(orderId, value.items, itemNotes)
+        repo.enqueueSync()
+        orderId
+    }
+
+    private suspend fun persistPurchaseItemNotes(orderId: Long, drafts: List<PurchaseItemDraft>, notes: List<String>) {
+        val savedLines = dao.getPurchasesForOrder(orderId)
+        val existingById = savedLines.associateBy { it.id }
+        val requestedExistingIds = drafts.mapNotNull { it.id.takeIf { id -> id > 0 } }.toSet()
+        val newLines = savedLines.filter { it.id !in requestedExistingIds }.sortedBy { it.id }.iterator()
+        val now = System.currentTimeMillis()
+
+        drafts.forEachIndexed { index, draft ->
+            val target = if (draft.id > 0) existingById[draft.id] else if (newLines.hasNext()) newLines.next() else null
+            if (target != null) {
+                dao.updatePurchase(target.copy(notes = notes.getOrNull(index).orEmpty().trim(), updatedAtMillis = now))
+            }
+        }
+    }
 
     fun markReceivedAllOrder(orderId: Long) = action("Purchase received") { repo.markReceivedAllOrder(orderId) }
 
@@ -64,7 +94,40 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     fun savePurchase(value: PurchaseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) = action("Purchase saved", onSuccess) { repo.savePurchase(value, attachmentUri) }
     fun markReceivedAll(value: PurchaseEntity) = action("Purchase received") { repo.markReceivedAll(value) }
 
-    fun saveSale(value: SaleDraft, onSuccess: () -> Unit) = action("Invoice generated", onSuccess) { repo.saveSale(value) }
+    /**
+     * The repository performs stock allocation first. We then regenerate the PDF from the committed
+     * allocations so notes/IMEIs from the exact purchase lots used by each sale line can be printed.
+     */
+    fun saveSale(value: SaleDraft, onSuccess: () -> Unit) = action("Invoice generated", onSuccess) {
+        val saleId = repo.saveSale(value)
+        refreshTraceableInvoice(saleId)
+        repo.enqueueSync()
+        saleId
+    }
+
+    private suspend fun refreshTraceableInvoice(saleId: Long) {
+        val sale = dao.getSale(saleId) ?: return
+        val customer = dao.getCustomer(sale.customerId) ?: return
+        val business = dao.getBusiness() ?: BusinessEntity()
+        val lines = dao.getSaleLinesForSale(saleId)
+        val lineIds = lines.map { it.id }.toSet()
+        val allocations = dao.getAllocationsForSale(saleId).filter { it.saleLineId in lineIds }
+        val purchaseMap = dao.getPurchases().associateBy { it.id }
+        val orderMap = dao.getPurchaseOrders().associateBy { it.id }
+
+        val sourceNotes = allocations.groupBy { it.saleLineId }.mapValues { (_, lineAllocations) ->
+            lineAllocations.mapNotNull { allocation ->
+                val purchase = purchaseMap[allocation.purchaseId] ?: return@mapNotNull null
+                val note = purchase.notes.trim()
+                val legacyOrderNote = orderMap[purchase.purchaseOrderId]?.notes?.trim().orEmpty()
+                note.takeIf { it.isNotBlank() && it != legacyOrderNote }
+            }.distinct().joinToString("\n")
+        }.filterValues { it.isNotBlank() }
+
+        val pdfPath = TraceableInvoicePdf.create(context, business, customer, sale, lines, sourceNotes)
+        dao.updateSale(sale.copy(pdfPath = pdfPath, updatedAtMillis = System.currentTimeMillis()))
+    }
+
     fun recordReturn(lineId: Long, day: Long, qty: Int, restock: Boolean, notes: String, onSuccess: () -> Unit = {}) = action("Customer return recorded", onSuccess) { repo.recordCustomerReturn(lineId, day, qty, restock, notes) }
     fun saveExpense(value: ExpenseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) = action("Expense saved", onSuccess) { repo.saveExpense(value, attachmentUri) }
     fun syncNow() = action("Dropbox sync queued") { repo.enqueueSync() }
