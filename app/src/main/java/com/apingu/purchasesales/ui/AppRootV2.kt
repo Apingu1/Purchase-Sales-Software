@@ -31,7 +31,7 @@ import com.apingu.purchasesales.PurchaseSalesApplication
 import com.apingu.purchasesales.data.*
 import com.apingu.purchasesales.util.*
 
-private val PurchaseAttentionStatuses = setOf("RECEIPT_PENDING", "PARTIALLY_RECEIVED", "REFUND_PENDING", "RETURNED")
+private val PendingReceiptStatuses = setOf("RECEIPT_PENDING", "PARTIALLY_RECEIVED")
 
 @Composable
 fun PurchaseSalesRootV2() {
@@ -128,7 +128,7 @@ private fun DashboardScreenV2(vm: AppViewModel, nav: NavHostController) {
     val purchaseLines by vm.purchases.collectAsStateWithLifecycle()
     val business by vm.business.collectAsStateWithLifecycle()
     val pendingOrders = orders.count { order ->
-        purchaseOrderStatus(purchaseLines.filter { it.purchaseOrderId == order.id }) in PurchaseAttentionStatuses
+        purchaseOrderStatus(purchaseLines.filter { it.purchaseOrderId == order.id }) in PendingReceiptStatuses
     }
 
     ScreenScaffold("Purchase & Sales") { inner ->
@@ -218,9 +218,15 @@ private fun PurchasesScreenV2(vm: AppViewModel, nav: NavHostController) {
     var query by remember { mutableStateOf("") }
 
     val rows = orders.map { order -> order to allLines.filter { it.purchaseOrderId == order.id } }
-    val pendingCount = rows.count { (_, lines) -> purchaseOrderStatus(lines) in PurchaseAttentionStatuses }
+    val pendingCount = rows.count { (_, lines) -> purchaseOrderStatus(lines) in PendingReceiptStatuses }
+    val otherCount = rows.size - pendingCount
     val filtered = rows.filter { (order, lines) ->
-        val statusMatches = tab == 1 || purchaseOrderStatus(lines) in PurchaseAttentionStatuses
+        val status = purchaseOrderStatus(lines)
+        val statusMatches = when (tab) {
+            0 -> status in PendingReceiptStatuses
+            1 -> status !in PendingReceiptStatuses
+            else -> true
+        }
         val queryMatches = query.isBlank() ||
             order.supplier.contains(query, true) ||
             order.orderNumber.contains(query, true) ||
@@ -236,19 +242,34 @@ private fun PurchasesScreenV2(vm: AppViewModel, nav: NavHostController) {
     ) { inner ->
         Column(Modifier.padding(inner)) {
             TabRow(tab) {
-                Tab(tab == 0, { tab = 0 }, text = { Text("Pending ($pendingCount)") })
-                Tab(tab == 1, { tab = 1 }, text = { Text("All") })
+                Tab(tab == 0, { tab = 0 }, text = { Text("Pending receipts") })
+                Tab(tab == 1, { tab = 1 }, text = { Text("All others") })
+                Tab(tab == 2, { tab = 2 }, text = { Text("All") })
             }
             OutlinedTextField(
-                query,
-                { query = it },
-                label = { Text("Search supplier, order or item") },
+                value = query,
+                onValueChange = { query = it },
+                label = { Text("Filter by supplier, item or order") },
                 leadingIcon = { Icon(Icons.Default.Search, null) },
-                modifier = Modifier.fillMaxWidth().padding(12.dp),
+                trailingIcon = {
+                    if (query.isNotBlank()) {
+                        IconButton(onClick = { query = "" }) { Icon(Icons.Default.Close, "Clear filter") }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 12.dp),
                 singleLine = true
             )
+            Text(
+                when (tab) {
+                    0 -> "Showing ${filtered.size} of $pendingCount pending receipt order${if (pendingCount == 1) "" else "s"}"
+                    1 -> "Showing ${filtered.size} of $otherCount other order${if (otherCount == 1) "" else "s"}"
+                    else -> "Showing ${filtered.size} of ${rows.size} total order${if (rows.size == 1) "" else "s"}"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
+            )
             if (filtered.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState("No purchase orders here yet") }
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState("No purchase orders match this view") }
             } else {
                 LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(filtered, key = { it.first.id }) { (order, lines) ->
