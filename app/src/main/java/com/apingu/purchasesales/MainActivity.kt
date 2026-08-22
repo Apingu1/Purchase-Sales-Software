@@ -7,7 +7,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import com.apingu.purchasesales.data.AppDatabase
 import com.apingu.purchasesales.data.AppRepository
-import com.apingu.purchasesales.ui.PurchaseSalesRoot
+import com.apingu.purchasesales.ui.PurchaseSalesRootV2
 
 class PurchaseSalesApplication : Application() {
     val database by lazy { AppDatabase.create(this) }
@@ -18,6 +18,6 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        setContent { PurchaseSalesRoot() }
+        setContent { PurchaseSalesRootV2() }
     }
 }
