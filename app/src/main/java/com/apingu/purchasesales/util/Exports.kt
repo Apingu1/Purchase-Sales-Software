@@ -182,10 +182,29 @@ object XlsxExport {
         val purRows = mutableListOf<List<Any?>>()
         purchases.forEach { p ->
             purRows += listOf(purRows.size + 1, p.supplier, editDate(p.purchaseDateEpochDay), p.item, p.netPence / 100.0, p.vatPence / 100.0, p.grossPence / 100.0, if (p.quantity > 0) p.grossPence / 100.0 / p.quantity else 0.0, p.quantity, p.grossPence / 100.0, purchaseNotes(p))
-            if (p.refundExpectedPence > 0) {
-                val creditGross = p.refundExpectedPence.coerceAtMost(p.grossPence)
-                val credit = breakdownFromGross(creditGross, p.vatType)
-                purRows += listOf(purRows.size + 1, p.supplier, editDate(p.purchaseDateEpochDay), "REFUND / RETURN - ${p.item}", -credit.netPence / 100.0, -credit.vatPence / 100.0, -credit.grossPence / 100.0, null, -p.returnedQty, -credit.grossPence / 100.0, "${p.status.replace('_', ' ')} | Expected ${formatMoney(p.refundExpectedPence)} | Received ${formatMoney(p.refundReceivedPence)}${if (credit.reverseVatPence > 0) " | Reverse VAT reversal ${formatMoney(credit.reverseVatPence)}" else ""}")
+            val creditGross = supplierRefundGrossPence(p)
+            if (creditGross > 0) {
+                val creditNet = if (p.refundNetPence > 0 || p.refundVatPence > 0) p.refundNetPence else breakdownFromGross(creditGross.coerceAtMost(p.grossPence), p.vatType).netPence
+                val creditVat = if (p.refundNetPence > 0 || p.refundVatPence > 0) p.refundVatPence else breakdownFromGross(creditGross.coerceAtMost(p.grossPence), p.vatType).vatPence
+                val reverseCredit = if (p.vatType == VatTypes.REVERSE) breakdownFromGross(creditNet, VatTypes.REVERSE).reverseVatPence else 0
+                purRows += listOf(
+                    purRows.size + 1,
+                    p.supplier,
+                    editDate(p.purchaseDateEpochDay),
+                    if (p.partialRefund) "PARTIAL REFUND - ${p.item}" else "REFUND / RETURN - ${p.item}",
+                    -creditNet / 100.0,
+                    -creditVat / 100.0,
+                    -(creditNet + creditVat) / 100.0,
+                    null,
+                    if (p.partialRefund) 0 else -p.returnedQty,
+                    -(creditNet + creditVat) / 100.0,
+                    buildString {
+                        append(if (p.partialRefund) "PARTIAL MONETARY REFUND / PRICE ADJUSTMENT" else p.status.replace('_', ' '))
+                        append(" | Net refunded ${formatMoney(creditNet)} | VAT refunded ${formatMoney(creditVat)}")
+                        append(" | Expected ${formatMoney(p.refundExpectedPence)} | Received ${formatMoney(p.refundReceivedPence)}")
+                        if (reverseCredit > 0) append(" | Reverse VAT reversal ${formatMoney(reverseCredit)}")
+                    }
+                )
             }
         }
 
@@ -245,6 +264,7 @@ object XlsxExport {
         if (p.vatType == VatTypes.REVERSE) add("Reverse VAT notional ${formatMoney(p.reverseVatPence)}")
         if (p.orderNumber.isNotBlank()) add("Order ${p.orderNumber}")
         if (p.status.isNotBlank()) add(p.status.replace('_', ' '))
+        if (p.partialRefund) add("Partial refund: net ${formatMoney(p.refundNetPence)}, VAT ${formatMoney(p.refundVatPence)}")
         if (p.notes.isNotBlank()) add(p.notes)
     }.joinToString(" | ")
 
