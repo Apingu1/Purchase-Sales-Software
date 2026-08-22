@@ -56,9 +56,7 @@ object DocumentStore {
             else -> "application/octet-stream"
         }
         val target = dir.createFile(mime, name) ?: return false
-        context.contentResolver.openOutputStream(target.uri).use { out ->
-            source.inputStream().use { it.copyTo(requireNotNull(out)) }
-        }
+        context.contentResolver.openOutputStream(target.uri).use { out -> source.inputStream().use { it.copyTo(requireNotNull(out)) } }
         return true
     }
 
@@ -90,14 +88,12 @@ object InvoicePdf {
             return 55f
         }
 
-        // Seller/business block.
         text(business.businessName.ifBlank { "Sales Invoice" }, 40f, 48f, 19f, true)
         text("INVOICE", 455f, 48f, 18f, true)
         text("Seller", 40f, 68f, 9f, true)
         var sellerY = 83f
         business.address.lines().map { it.trim() }.filter { it.isNotBlank() }.take(4).forEach {
-            text(it.take(65), 40f, sellerY, 9f)
-            sellerY += 13f
+            text(it.take(65), 40f, sellerY, 9f); sellerY += 13f
         }
         if (business.email.isNotBlank()) { text("Email: ${business.email}".take(75), 40f, sellerY, 9f); sellerY += 13f }
         if (business.phone.isNotBlank()) { text("Phone: ${business.phone}".take(75), 40f, sellerY, 9f); sellerY += 13f }
@@ -115,28 +111,20 @@ object InvoicePdf {
         }
 
         var billY = noticeY + if (sale.vatType == VatTypes.REVERSE) 28f else 12f
-        text("Bill to", 40f, billY, 10f, true)
-        billY += 17f
-        text(customer.companyName, 40f, billY, 11f, true)
-        billY += 15f
+        text("Bill to", 40f, billY, 10f, true); billY += 17f
+        text(customer.companyName, 40f, billY, 11f, true); billY += 15f
         customer.address.lines().map { it.trim() }.filter { it.isNotBlank() }.take(4).forEach {
-            text(it.take(65), 40f, billY, 9f)
-            billY += 13f
+            text(it.take(65), 40f, billY, 9f); billY += 13f
         }
         if (customer.email.isNotBlank()) { text("Email: ${customer.email}".take(75), 40f, billY, 9f); billY += 13f }
         if (customer.vatNumber.isNotBlank()) { text("VAT No: ${customer.vatNumber}", 40f, billY, 9f); billY += 13f }
 
         var y = maxOf(285f, billY + 22f)
         paint.strokeWidth = 1f
-        canvas.drawLine(40f, y, 555f, y, paint)
-        y += 18f
-        text("Item", 40f, y, 9f, true)
-        text("Qty", 330f, y, 9f, true)
-        text("Unit Gross", 385f, y, 9f, true)
-        text("Gross", 490f, y, 9f, true)
+        canvas.drawLine(40f, y, 555f, y, paint); y += 18f
+        text("Item", 40f, y, 9f, true); text("Qty", 330f, y, 9f, true); text("Unit Gross", 385f, y, 9f, true); text("Gross", 490f, y, 9f, true)
         y += 9f
-        canvas.drawLine(40f, y, 555f, y, paint)
-        y += 20f
+        canvas.drawLine(40f, y, 555f, y, paint); y += 20f
 
         lines.forEach { line ->
             if (y > 710f) y = newPage()
@@ -149,8 +137,7 @@ object InvoicePdf {
 
         if (y > 650f) y = newPage()
         y += 14f
-        canvas.drawLine(330f, y, 555f, y, paint)
-        y += 20f
+        canvas.drawLine(330f, y, 555f, y, paint); y += 20f
         text("Net", 390f, y, 10f); text(formatMoney(sale.netPence), 490f, y, 10f, true); y += 18f
         text("VAT", 390f, y, 10f); text(formatMoney(sale.vatPence), 490f, y, 10f, true); y += 18f
         text("TOTAL", 390f, y, 12f, true); text(formatMoney(sale.grossPence), 490f, y, 12f, true); y += 26f
@@ -166,17 +153,10 @@ object InvoicePdf {
 
         y += 22f
         if (business.bankDetails.isNotBlank()) {
-            text("Payment details", 40f, y, 9f, true)
-            y += 14f
-            business.bankDetails.lines().filter { it.isNotBlank() }.take(4).forEach {
-                text(it.take(80), 40f, y, 8f)
-                y += 12f
-            }
+            text("Payment details", 40f, y, 9f, true); y += 14f
+            business.bankDetails.lines().filter { it.isNotBlank() }.take(4).forEach { text(it.take(80), 40f, y, 8f); y += 12f }
         }
-        if (business.invoiceTerms.isNotBlank()) {
-            y += 8f
-            text("Terms: ${business.invoiceTerms}".take(95), 40f, y, 8f)
-        }
+        if (business.invoiceTerms.isNotBlank()) { y += 8f; text("Terms: ${business.invoiceTerms}".take(95), 40f, y, 8f) }
         if (business.invoiceFooter.isNotBlank()) text(business.invoiceFooter.take(95), 40f, 810f, 7f)
 
         doc.finishPage(page)
@@ -201,21 +181,11 @@ object XlsxExport {
         val purHeaders = listOf("NO", "STORE", "INVOICE DATE", "MODEL", "NET", "VAT", "GROSS", "Unit Price", "QTY", "TOTAL", "Notes (please comment about reverse charge etc)")
         val purRows = mutableListOf<List<Any?>>()
         purchases.forEach { p ->
-            purRows += listOf(
-                purRows.size + 1, p.supplier, editDate(p.purchaseDateEpochDay), p.item,
-                p.netPence / 100.0, p.vatPence / 100.0, p.grossPence / 100.0,
-                if (p.quantity > 0) p.grossPence / 100.0 / p.quantity else 0.0,
-                p.quantity, p.grossPence / 100.0, purchaseNotes(p)
-            )
+            purRows += listOf(purRows.size + 1, p.supplier, editDate(p.purchaseDateEpochDay), p.item, p.netPence / 100.0, p.vatPence / 100.0, p.grossPence / 100.0, if (p.quantity > 0) p.grossPence / 100.0 / p.quantity else 0.0, p.quantity, p.grossPence / 100.0, purchaseNotes(p))
             if (p.refundExpectedPence > 0) {
                 val creditGross = p.refundExpectedPence.coerceAtMost(p.grossPence)
                 val credit = breakdownFromGross(creditGross, p.vatType)
-                purRows += listOf(
-                    purRows.size + 1, p.supplier, editDate(p.purchaseDateEpochDay), "REFUND / RETURN - ${p.item}",
-                    -credit.netPence / 100.0, -credit.vatPence / 100.0, -credit.grossPence / 100.0,
-                    null, -p.returnedQty, -credit.grossPence / 100.0,
-                    "${p.status.replace('_', ' ')} | Expected ${formatMoney(p.refundExpectedPence)} | Received ${formatMoney(p.refundReceivedPence)}${if (credit.reverseVatPence > 0) " | Reverse VAT reversal ${formatMoney(credit.reverseVatPence)}" else ""}"
-                )
+                purRows += listOf(purRows.size + 1, p.supplier, editDate(p.purchaseDateEpochDay), "REFUND / RETURN - ${p.item}", -credit.netPence / 100.0, -credit.vatPence / 100.0, -credit.grossPence / 100.0, null, -p.returnedQty, -credit.grossPence / 100.0, "${p.status.replace('_', ' ')} | Expected ${formatMoney(p.refundExpectedPence)} | Received ${formatMoney(p.refundReceivedPence)}${if (credit.reverseVatPence > 0) " | Reverse VAT reversal ${formatMoney(credit.reverseVatPence)}" else ""}")
             }
         }
 
@@ -226,34 +196,17 @@ object XlsxExport {
         sales.forEach { s ->
             val itemsNote = saleLines.filter { it.saleId == s.id }.joinToString(", ") { "${it.item} x${it.quantity}" }
             val notes = listOf(itemsNote, s.notes).filter { it.isNotBlank() }.joinToString(" | ")
-            saleRows += listOf(
-                saleRows.size + 1, s.invoiceNo, editDate(s.saleDateEpochDay), customerMap[s.customerId]?.companyName.orEmpty(),
-                s.netPence / 100.0, s.vatPence / 100.0, s.grossPence / 100.0,
-                if (s.vatType == VatTypes.REVERSE) s.reverseVatPence / 100.0 else null, notes
-            )
+            saleRows += listOf(saleRows.size + 1, s.invoiceNo, editDate(s.saleDateEpochDay), customerMap[s.customerId]?.companyName.orEmpty(), s.netPence / 100.0, s.vatPence / 100.0, s.grossPence / 100.0, if (s.vatType == VatTypes.REVERSE) s.reverseVatPence / 100.0 else null, notes)
         }
         saleReturns.forEach { r ->
             val line = lineById[r.saleLineId] ?: return@forEach
             val sale = saleById[line.saleId] ?: return@forEach
             val reverse = if (sale.vatType == VatTypes.REVERSE) breakdownFromGross(r.refundGrossPence, sale.vatType).reverseVatPence else 0
-            saleRows += listOf(
-                saleRows.size + 1, "${sale.invoiceNo}-RET${r.id}", editDate(r.returnDateEpochDay),
-                customerMap[sale.customerId]?.companyName.orEmpty(), -r.refundNetPence / 100.0,
-                -r.refundVatPence / 100.0, -r.refundGrossPence / 100.0,
-                if (reverse > 0) -reverse / 100.0 else null,
-                "CUSTOMER RETURN: ${line.item} x${r.quantity} | Restocked: ${if (r.restock) "Yes" else "No"}${if (r.notes.isNotBlank()) " | ${r.notes}" else ""}"
-            )
+            saleRows += listOf(saleRows.size + 1, "${sale.invoiceNo}-RET${r.id}", editDate(r.returnDateEpochDay), customerMap[sale.customerId]?.companyName.orEmpty(), -r.refundNetPence / 100.0, -r.refundVatPence / 100.0, -r.refundGrossPence / 100.0, if (reverse > 0) -reverse / 100.0 else null, "CUSTOMER RETURN: ${line.item} x${r.quantity} | Restocked: ${if (r.restock) "Yes" else "No"}${if (r.notes.isNotBlank()) " | ${r.notes}" else ""}")
         }
 
         val expHeaders = listOf("NO", "STORE", "DATE", "DETAILS", "Account", "vat", "TOTAL", "Vatable?", "Comments")
-        val expRows = expenses.mapIndexed { i, e ->
-            listOf<Any?>(
-                i + 1, e.supplier, editDate(e.expenseDateEpochDay), e.details, e.account,
-                e.vatPence / 100.0, e.grossPence / 100.0,
-                when (e.vatType) { VatTypes.STANDARD -> "Yes"; VatTypes.REVERSE -> "Reverse"; else -> "No" },
-                e.comments
-            )
-        }
+        val expRows = expenses.mapIndexed { i, e -> listOf<Any?>(i + 1, e.supplier, editDate(e.expenseDateEpochDay), e.details, e.account, e.vatPence / 100.0, e.grossPence / 100.0, when (e.vatType) { VatTypes.STANDARD -> "Yes"; VatTypes.REVERSE -> "Reverse"; else -> "No" }, e.comments) }
 
         val profitHeaders = listOf("Metric", "Amount")
         val profitRows = listOf(
@@ -296,33 +249,17 @@ object XlsxExport {
     }.joinToString(" | ")
 
     private fun entry(zip: ZipOutputStream, name: String, text: String) {
-        zip.putNextEntry(ZipEntry(name))
-        zip.write(text.toByteArray(Charsets.UTF_8))
-        zip.closeEntry()
+        zip.putNextEntry(ZipEntry(name)); zip.write(text.toByteArray(Charsets.UTF_8)); zip.closeEntry()
     }
 
-    private fun esc(s: String) = s
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
+    private fun esc(s: String) = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
 
     private fun colName(index: Int): String {
-        var n = index + 1
-        var out = ""
-        while (n > 0) {
-            val r = (n - 1) % 26
-            out = ('A'.code + r).toChar() + out
-            n = (n - 1) / 26
-        }
+        var n = index + 1; var out = ""
+        while (n > 0) { val r = (n - 1) % 26; out = ('A'.code + r).toChar() + out; n = (n - 1) / 26 }
         return out
     }
 
-    /**
-     * SpreadsheetML has a strict child-element order. In particular sheetFormatPr must be before
-     * sheetData; putting it after autoFilter produces files that some desktop readers repair but
-     * stricter Android/mobile spreadsheet viewers reject as unsupported.
-     */
     private fun sheetXml(headers: List<String>, rows: List<List<Any?>>, moneyCols: Set<Int>): String {
         val lastColumn = colName(headers.lastIndex)
         val lastRow = rows.size + 1
@@ -333,7 +270,7 @@ object XlsxExport {
                 "<dimension ref=\"$dimension\"/>" +
                 "<sheetViews><sheetView workbookViewId=\"0\"><pane ySplit=\"1\" topLeftCell=\"A2\" activePane=\"bottomLeft\" state=\"frozen\"/></sheetView></sheetViews>" +
                 "<sheetFormatPr defaultRowHeight=\"15\"/>" +
-                "<cols><col min=\"1\" max=\"$${headers.size}\" width=\"16\" customWidth=\"1\"/></cols>" +
+                "<cols><col min=\"1\" max=\"${headers.size}\" width=\"16\" customWidth=\"1\"/></cols>" +
                 "<sheetData>"
         )
 
@@ -343,17 +280,12 @@ object XlsxExport {
                 val ref = "${colName(c)}$r"
                 when (v) {
                     null -> Unit
-                    is Number -> sb.append(
-                        "<c r=\"$ref\"${if (!header && c in moneyCols) " s=\"2\"" else if (header) " s=\"1\"" else ""}><v>${v}</v></c>"
-                    )
-                    else -> sb.append(
-                        "<c r=\"$ref\" t=\"inlineStr\"${if (header) " s=\"1\"" else ""}><is><t xml:space=\"preserve\">${esc(v.toString())}</t></is></c>"
-                    )
+                    is Number -> sb.append("<c r=\"$ref\"${if (!header && c in moneyCols) " s=\"2\"" else if (header) " s=\"1\"" else ""}><v>${v}</v></c>")
+                    else -> sb.append("<c r=\"$ref\" t=\"inlineStr\"${if (header) " s=\"1\"" else ""}><is><t xml:space=\"preserve\">${esc(v.toString())}</t></is></c>")
                 }
             }
             sb.append("</row>")
         }
-
         rowXml(1, headers, true)
         rows.forEachIndexed { i, row -> rowXml(i + 2, row) }
         sb.append("</sheetData><autoFilter ref=\"$dimension\"/></worksheet>")
@@ -386,12 +318,7 @@ object XlsxExport {
 <fileVersion appName="xl" lastEdited="7" lowestEdited="7" rupBuild="0"/>
 <workbookPr defaultThemeVersion="164011"/>
 <bookViews><workbookView xWindow="0" yWindow="0" windowWidth="28800" windowHeight="15000"/></bookViews>
-<sheets>
-<sheet name="PUR" sheetId="1" r:id="rId1"/>
-<sheet name="SALES" sheetId="2" r:id="rId2"/>
-<sheet name="EXPENSES" sheetId="3" r:id="rId3"/>
-<sheet name="PROFIT &amp; VAT" sheetId="4" r:id="rId4"/>
-</sheets>
+<sheets><sheet name="PUR" sheetId="1" r:id="rId1"/><sheet name="SALES" sheetId="2" r:id="rId2"/><sheet name="EXPENSES" sheetId="3" r:id="rId3"/><sheet name="PROFIT &amp; VAT" sheetId="4" r:id="rId4"/></sheets>
 <calcPr calcId="191029" fullCalcOnLoad="1"/>
 </workbook>"""
 
@@ -406,57 +333,37 @@ object XlsxExport {
 
     private fun styles() = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<fonts count="2">
-<font><sz val="11"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>
-<font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>
-</fonts>
-<fills count="3">
-<fill><patternFill patternType="none"/></fill>
-<fill><patternFill patternType="gray125"/></fill>
-<fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill>
-</fills>
+<fonts count="2"><font><sz val="11"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font><font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font></fonts>
+<fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FF1F4E78"/><bgColor indexed="64"/></patternFill></fill></fills>
 <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="3">
-<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
-<xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFill="1" applyFont="1"/>
-<xf numFmtId="4" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
-</cellXfs>
-<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
-<dxfs count="0"/>
-<tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>
+<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFill="1" applyFont="1"/><xf numFmtId="4" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>
+<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><dxfs count="0"/><tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>
 </styleSheet>"""
 
     private fun appProperties() = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
-<Application>Purchase &amp; Sales Software</Application>
-<AppVersion>1.0</AppVersion>
-</Properties>"""
+<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><Application>Purchase &amp; Sales Software</Application><AppVersion>1.0</AppVersion></Properties>"""
 
     private fun coreProperties(): String {
         val now = Instant.now().toString()
         return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-<dc:creator>Purchase &amp; Sales Software</dc:creator>
-<cp:lastModifiedBy>Purchase &amp; Sales Software</cp:lastModifiedBy>
-<dcterms:created xsi:type="dcterms:W3CDTF">$now</dcterms:created>
-<dcterms:modified xsi:type="dcterms:W3CDTF">$now</dcterms:modified>
-</cp:coreProperties>"""
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>Purchase &amp; Sales Software</dc:creator><cp:lastModifiedBy>Purchase &amp; Sales Software</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">$now</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">$now</dcterms:modified></cp:coreProperties>"""
     }
 
     private fun validatePackage(target: File) {
-        val required = setOf(
-            "[Content_Types].xml", "_rels/.rels", "docProps/app.xml", "docProps/core.xml",
-            "xl/workbook.xml", "xl/_rels/workbook.xml.rels", "xl/styles.xml",
-            "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml", "xl/worksheets/sheet3.xml", "xl/worksheets/sheet4.xml"
-        )
+        val required = setOf("[Content_Types].xml", "_rels/.rels", "docProps/app.xml", "docProps/core.xml", "xl/workbook.xml", "xl/_rels/workbook.xml.rels", "xl/styles.xml", "xl/worksheets/sheet1.xml", "xl/worksheets/sheet2.xml", "xl/worksheets/sheet3.xml", "xl/worksheets/sheet4.xml")
         ZipFile(target).use { zip ->
             val names = zip.entries().asSequence().map { it.name }.toSet()
             require(required.all { it in names }) { "Generated Excel workbook is incomplete" }
             val factory = DocumentBuilderFactory.newInstance().apply { isNamespaceAware = true }
             required.filter { it.endsWith(".xml") || it.endsWith(".rels") }.forEach { name ->
-                zip.getInputStream(requireNotNull(zip.getEntry(name))).use { input ->
-                    factory.newDocumentBuilder().parse(input)
+                val doc = zip.getInputStream(requireNotNull(zip.getEntry(name))).use { factory.newDocumentBuilder().parse(it) }
+                if (name.startsWith("xl/worksheets/")) {
+                    val cols = doc.getElementsByTagNameNS("http://schemas.openxmlformats.org/spreadsheetml/2006/main", "col")
+                    for (i in 0 until cols.length) {
+                        val max = cols.item(i).attributes.getNamedItem("max")?.nodeValue
+                        require(max?.toIntOrNull() != null) { "Generated Excel workbook has invalid column metadata" }
+                    }
                 }
             }
         }
