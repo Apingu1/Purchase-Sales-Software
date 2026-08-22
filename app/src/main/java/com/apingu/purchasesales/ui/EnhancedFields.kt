@@ -1,7 +1,12 @@
 package com.apingu.purchasesales.ui
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.KeyboardArrowDown
@@ -22,6 +27,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.apingu.purchasesales.PurchaseSalesApplication
 import com.apingu.purchasesales.util.editDate
@@ -44,7 +50,21 @@ fun PurchaseSalesHost(app: PurchaseSalesApplication) {
             .sortedBy { it.lowercase() }
     }
     CompositionLocalProvider(LocalSupplierSuggestions provides suppliers) {
-        PurchaseSalesRootV2()
+        /*
+         * Apply physical system-bar safe areas exactly once at the host and mark them consumed.
+         * The app has nested Material Scaffolds (root -> navigation -> screen). Without consuming
+         * the inset here each Scaffold can reserve the status/navigation bar again, creating the
+         * large dead bands visible on tall phones. The real device insets are used, so this also
+         * scales correctly on shorter/smaller Android screens and devices with different cutouts.
+         */
+        Box(
+            Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.systemBars)
+                .consumeWindowInsets(WindowInsets.systemBars)
+        ) {
+            PurchaseSalesRootV2()
+        }
     }
 }
 
@@ -62,7 +82,7 @@ fun FormField(label: String, value: String, onValueChange: (String) -> Unit) {
             value = value,
             onValueChange = onValueChange,
             label = { Text(label) },
-            modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             minLines = 1
         )
@@ -95,7 +115,7 @@ private fun DateFormField(label: String, value: String, onValueChange: (String) 
         value = value,
         onValueChange = onValueChange,
         label = { Text(label) },
-        modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth(),
         singleLine = true,
         trailingIcon = {
             IconButton(onClick = { showPicker = true }) {
@@ -143,7 +163,7 @@ private fun SupplierHistoryField(label: String, value: String, onValueChange: (S
                 expanded = true
             },
             label = { Text(label) },
-            modifier = androidx.compose.ui.Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             trailingIcon = {
                 IconButton(onClick = { expanded = matches.isNotEmpty() }) {
