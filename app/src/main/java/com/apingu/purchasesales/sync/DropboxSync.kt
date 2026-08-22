@@ -54,7 +54,7 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
             val xlsx = File(exportDir, "Business_Records_${label}.xlsx")
             XlsxExport.create(
                 xlsx,
-                purchases.filter { it.purchaseDateEpochDay in start..end },
+                purchases.filter { it.purchaseDateEpochDay in start..end && !isCancelledAndFullyRefundedPurchase(it) },
                 sales.filter { it.saleDateEpochDay in start..end },
                 saleLines,
                 returns.filter { it.returnDateEpochDay in start..end },
@@ -64,9 +64,24 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
             )
             DropboxApi.upload(token, "$root/Excel/$label/${xlsx.name}", xlsx.readBytes())
 
-            purchases.forEach { p -> p.invoicePath?.let { path ->
-                val f = File(path); if (f.exists()) DropboxApi.upload(token, "$root/Purchases/$label/Invoices/PUR_${p.id}_${safe(p.item)}.${f.extension.ifBlank { "bin" }}", f.readBytes())
-            } }
+            // Purchase invoices are order-level documents. If every line on an order has been
+            // cancelled and fully refunded, remove the previously synced Dropbox copy instead of
+            // uploading it again. Mixed orders keep their invoice until the whole order is voided.
+            val purchaseOrderGroups = purchases.groupBy { p ->
+                p.purchaseOrderId.takeIf { it > 0 } ?: -p.id
+            }
+            purchaseOrderGroups.values.forEach { lines ->
+                val voidedOrder = isCancelledAndFullyRefundedOrder(lines)
+                lines.forEach { p -> p.invoicePath?.let { path ->
+                    val f = File(path)
+                    val remotePath = "$root/Purchases/$label/Invoices/PUR_${p.id}_${safe(p.item)}.${f.extension.ifBlank { "bin" }}"
+                    if (voidedOrder) {
+                        DropboxApi.deleteIfExists(token, remotePath)
+                    } else if (f.exists()) {
+                        DropboxApi.upload(token, remotePath, f.readBytes())
+                    }
+                } }
+            }
             sales.forEach { s -> s.pdfPath?.let { path ->
                 val f = File(path); if (f.exists()) DropboxApi.upload(token, "$root/Sales/$label/Invoices/${s.invoiceNo}.pdf", f.readBytes())
             } }
@@ -114,6 +129,20 @@ object DropboxApi {
         conn.outputStream.use { it.write(bytes) }
         val response = readResponse(conn)
         if (conn.responseCode !in 200..299) error("Dropbox upload failed: $response")
+    }
+
+    fun deleteIfExists(token: String, path: String) {
+        val conn = URL("https://api.dropboxapi.com/2/files/delete_v2").openConnection() as HttpURLConnection
+        conn.requestMethod = "POST"
+        conn.doOutput = true
+        conn.setRequestProperty("Authorization", "Bearer $token")
+        conn.setRequestProperty("Content-Type", "application/json")
+        conn.outputStream.use { it.write("{\"path\":\"${json(path)}\"}".toByteArray()) }
+        val response = readResponse(conn)
+        if (conn.responseCode in 200..299) return
+        // Deletion is idempotent for sync purposes. Dropbox reports a missing path as a 409.
+        if (conn.responseCode == 409 && response.contains("not_found", ignoreCase = true)) return
+        error("Dropbox delete failed: $response")
     }
 
     private fun readResponse(conn: HttpURLConnection): String {
