@@ -273,6 +273,7 @@ private fun PurchaseOrderCard(
     val totalQty = lines.sumOf { it.quantity }
     val received = lines.sumOf { it.receivedQty }
     val returned = lines.sumOf { it.returnedQty }
+    val partialCredits = lines.filter { it.partialRefund }.sumOf { it.refundNetPence + it.refundVatPence }
     val itemText = when {
         lines.isEmpty() -> "No items"
         lines.size == 1 -> "${lines.first().item} × ${lines.first().quantity}"
@@ -303,6 +304,7 @@ private fun PurchaseOrderCard(
                 style = MaterialTheme.typography.bodySmall
             )
             Text("Received $received • Returned $returned", style = MaterialTheme.typography.bodySmall)
+            if (partialCredits > 0) Text("Partial refund credits ${formatMoney(partialCredits)}", style = MaterialTheme.typography.bodySmall)
             if (status == "RECEIPT_PENDING" || status == "PARTIALLY_RECEIVED") {
                 TextButton({ vm.markReceivedAllOrder(order.id) }) {
                     Icon(Icons.Default.CheckCircle, null)
@@ -327,11 +329,14 @@ private data class PurchaseLineFormV2(
     val item: String = "",
     val quantity: String = "1",
     val gross: String = "",
-    val received: String = "0",
-    val cancelled: String = "0",
-    val returned: String = "0",
+    val received: String = "",
+    val cancelled: String = "",
+    val returned: String = "",
     val refundExpected: String = "",
-    val refundReceived: String = ""
+    val refundReceived: String = "",
+    val partialRefund: Boolean = false,
+    val refundNet: String = "",
+    val refundVat: String = ""
 )
 
 @Composable
@@ -365,11 +370,14 @@ private fun PurchaseOrderEditor(vm: AppViewModel, nav: NavHostController, id: Lo
                             item = line.item,
                             quantity = line.quantity.toString(),
                             gross = formatMoneyPlain(line.grossPence),
-                            received = line.receivedQty.toString(),
-                            cancelled = line.cancelledQty.toString(),
-                            returned = line.returnedQty.toString(),
-                            refundExpected = line.refundExpectedPence.takeIf { it > 0 }?.let(::formatMoneyPlain).orEmpty(),
-                            refundReceived = line.refundReceivedPence.takeIf { it > 0 }?.let(::formatMoneyPlain).orEmpty()
+                            received = line.receivedQty.takeIf { it > 0 }?.toString().orEmpty(),
+                            cancelled = line.cancelledQty.takeIf { it > 0 }?.toString().orEmpty(),
+                            returned = line.returnedQty.takeIf { it > 0 }?.toString().orEmpty(),
+                            refundExpected = line.refundExpectedPence.takeIf { it > 0 && !line.partialRefund }?.let(::formatMoneyPlain).orEmpty(),
+                            refundReceived = line.refundReceivedPence.takeIf { it > 0 && !line.partialRefund }?.let(::formatMoneyPlain).orEmpty(),
+                            partialRefund = line.partialRefund,
+                            refundNet = line.refundNetPence.takeIf { it > 0 && line.partialRefund }?.let(::formatMoneyPlain).orEmpty(),
+                            refundVat = line.refundVatPence.takeIf { it > 0 && line.partialRefund }?.let(::formatMoneyPlain).orEmpty()
                         )
                     )
                 }
@@ -383,6 +391,9 @@ private fun PurchaseOrderEditor(vm: AppViewModel, nav: NavHostController, id: Lo
     val totalGross = forms.sumOf { runCatching { moneyToPence(it.gross) }.getOrDefault(0) }
     val totalBreakdown = breakdownFromGross(totalGross, vatType)
     val totalQty = forms.sumOf { it.quantity.toIntOrNull() ?: 0 }
+    val totalPartialCredits = forms.filter { it.partialRefund }.sumOf {
+        runCatching { moneyToPence(it.refundNet) }.getOrDefault(0) + runCatching { moneyToPence(it.refundVat) }.getOrDefault(0)
+    }
 
     ScreenScaffold(if (id == 0L) "New purchase" else "Edit purchase", onBack = { nav.popBackStack() }) { inner ->
         Column(
@@ -410,6 +421,7 @@ private fun PurchaseOrderEditor(vm: AppViewModel, nav: NavHostController, id: Lo
                 PurchaseLineCardV2(
                     index = index,
                     form = form,
+                    vatType = vatType,
                     canDelete = forms.size > 1,
                     onChange = { updated -> forms[index] = updated },
                     onDelete = { if (forms.size > 1) forms.removeAt(index) }
@@ -431,6 +443,9 @@ private fun PurchaseOrderEditor(vm: AppViewModel, nav: NavHostController, id: Lo
                     Text(formatMoney(totalBreakdown.grossPence), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
                     Text("${forms.size} item line${if (forms.size == 1) "" else "s"} • $totalQty total units")
                     Text("Net ${formatMoney(totalBreakdown.netPence)} • VAT ${formatMoney(totalBreakdown.vatPence)}", style = MaterialTheme.typography.bodySmall)
+                    if (totalPartialCredits > 0) {
+                        Text("Partial refund credits ${formatMoney(totalPartialCredits)}", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.SemiBold)
+                    }
                     if (vatType == VatTypes.REVERSE) {
                         Text(
                             "Notional reverse VAT ${formatMoney(totalBreakdown.reverseVatPence)} (input and output; net £0)",
@@ -472,8 +487,11 @@ private fun PurchaseOrderEditor(vm: AppViewModel, nav: NavHostController, id: Lo
                                     receivedQty = form.received.toIntOrNull() ?: 0,
                                     cancelledQty = form.cancelled.toIntOrNull() ?: 0,
                                     returnedQty = form.returned.toIntOrNull() ?: 0,
-                                    refundExpectedPence = runCatching { moneyToPence(form.refundExpected) }.getOrDefault(0),
-                                    refundReceivedPence = runCatching { moneyToPence(form.refundReceived) }.getOrDefault(0)
+                                    refundExpectedPence = if (form.partialRefund) 0 else runCatching { moneyToPence(form.refundExpected) }.getOrDefault(0),
+                                    refundReceivedPence = if (form.partialRefund) 0 else runCatching { moneyToPence(form.refundReceived) }.getOrDefault(0),
+                                    partialRefund = form.partialRefund,
+                                    refundNetPence = if (form.partialRefund) runCatching { moneyToPence(form.refundNet) }.getOrDefault(0) else 0,
+                                    refundVatPence = if (form.partialRefund) runCatching { moneyToPence(form.refundVat) }.getOrDefault(0) else 0
                                 )
                             },
                             existingInvoicePath = order?.invoicePath
@@ -496,6 +514,7 @@ private fun PurchaseOrderEditor(vm: AppViewModel, nav: NavHostController, id: Lo
 private fun PurchaseLineCardV2(
     index: Int,
     form: PurchaseLineFormV2,
+    vatType: String,
     canDelete: Boolean,
     onChange: (PurchaseLineFormV2) -> Unit,
     onDelete: () -> Unit
@@ -503,6 +522,8 @@ private fun PurchaseLineCardV2(
     val qty = form.quantity.toIntOrNull() ?: 0
     val grossPence = runCatching { moneyToPence(form.gross) }.getOrDefault(0)
     val unitGross = if (qty > 0) grossPence / qty else 0
+    val refundNet = runCatching { moneyToPence(form.refundNet) }.getOrDefault(0)
+    val refundVat = runCatching { moneyToPence(form.refundVat) }.getOrDefault(0)
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -536,29 +557,76 @@ private fun PurchaseLineCardV2(
             }
 
             HorizontalDivider()
-            Text("Receipt / return tracking", style = MaterialTheme.typography.labelLarge)
+            Text("Receipt / return / refund tracking", style = MaterialTheme.typography.labelLarge)
+            Text(
+                "New order awaiting delivery? Leave Received, Cancelled, Returned and refund fields blank. The order will remain Pending Receipt.",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 CompactNumberField("Received", form.received, Modifier.weight(1f)) { onChange(form.copy(received = it)) }
                 CompactNumberField("Cancelled", form.cancelled, Modifier.weight(1f)) { onChange(form.copy(cancelled = it)) }
                 CompactNumberField("Returned", form.returned, Modifier.weight(1f)) { onChange(form.copy(returned = it)) }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    form.refundExpected,
-                    { onChange(form.copy(refundExpected = it)) },
-                    label = { Text("Refund expected £") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
+
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(
+                    checked = form.partialRefund,
+                    onCheckedChange = { checked -> onChange(form.copy(partialRefund = checked)) }
                 )
-                OutlinedTextField(
-                    form.refundReceived,
-                    { onChange(form.copy(refundReceived = it)) },
-                    label = { Text("Refund received £") },
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                    modifier = Modifier.weight(1f),
-                    singleLine = true
+                Column(Modifier.weight(1f)) {
+                    Text("Partial refund / price adjustment", fontWeight = FontWeight.SemiBold)
+                    Text("Use when you keep the item but the supplier refunds part of its price.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+
+            if (form.partialRefund) {
+                Text(
+                    "Enter the refund exactly as credited. Net and VAT are separate because a supplier may refund net only with £0 VAT. Stock quantity is not reduced.",
+                    style = MaterialTheme.typography.bodySmall
                 )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        form.refundNet,
+                        { onChange(form.copy(refundNet = it)) },
+                        label = { Text("Refund net £") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        form.refundVat,
+                        { onChange(form.copy(refundVat = it)) },
+                        label = { Text("Refund VAT £") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                }
+                Text(
+                    "Total partial refund ${formatMoney(refundNet + refundVat)} • Net ${formatMoney(refundNet)} • VAT ${formatMoney(refundVat)}${if (vatType == VatTypes.REVERSE && refundNet > 0) " • reverse VAT adjustment ${formatMoney(breakdownFromGross(refundNet, VatTypes.REVERSE).reverseVatPence)}" else ""}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold
+                )
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        form.refundExpected,
+                        { onChange(form.copy(refundExpected = it)) },
+                        label = { Text("Refund expected £") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                    OutlinedTextField(
+                        form.refundReceived,
+                        { onChange(form.copy(refundReceived = it)) },
+                        label = { Text("Refund received £") },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        modifier = Modifier.weight(1f),
+                        singleLine = true
+                    )
+                }
             }
         }
     }
