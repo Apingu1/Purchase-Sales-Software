@@ -2,6 +2,8 @@ package com.apingu.purchasesales.data
 
 import android.content.Context
 import androidx.room.*
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 @Entity(tableName = "business")
@@ -38,9 +40,29 @@ data class CustomerEntity(
     val notes: String = ""
 )
 
-@Entity(tableName = "purchases")
+/**
+ * Purchase/order header. One order can contain any number of PurchaseEntity line items.
+ * The existing purchases table remains the stock/financial lot table so inventory,
+ * FIFO costing and historical data continue to work at individual item-line level.
+ */
+@Entity(tableName = "purchase_orders")
+data class PurchaseOrderEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val purchaseDateEpochDay: Long,
+    val supplier: String,
+    val orderNumber: String = "",
+    val accountUsername: String = "",
+    val vatType: String,
+    val paymentMethod: String = "",
+    val invoicePath: String? = null,
+    val notes: String = "",
+    val updatedAtMillis: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "purchases", indices = [Index("purchaseOrderId")])
 data class PurchaseEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @ColumnInfo(defaultValue = "0") val purchaseOrderId: Long = 0,
     val purchaseDateEpochDay: Long,
     val supplier: String,
     val item: String,
@@ -153,11 +175,20 @@ interface AppDao {
     @Update suspend fun updateCustomer(value: CustomerEntity)
     @Delete suspend fun deleteCustomer(value: CustomerEntity)
 
+    @Query("SELECT * FROM purchase_orders ORDER BY purchaseDateEpochDay DESC, id DESC") fun observePurchaseOrders(): Flow<List<PurchaseOrderEntity>>
+    @Query("SELECT * FROM purchase_orders ORDER BY purchaseDateEpochDay ASC, id ASC") suspend fun getPurchaseOrders(): List<PurchaseOrderEntity>
+    @Query("SELECT * FROM purchase_orders WHERE id = :id") suspend fun getPurchaseOrder(id: Long): PurchaseOrderEntity?
+    @Insert suspend fun insertPurchaseOrder(value: PurchaseOrderEntity): Long
+    @Update suspend fun updatePurchaseOrder(value: PurchaseOrderEntity)
+    @Delete suspend fun deletePurchaseOrder(value: PurchaseOrderEntity)
+
     @Query("SELECT * FROM purchases ORDER BY purchaseDateEpochDay DESC, id DESC") fun observePurchases(): Flow<List<PurchaseEntity>>
     @Query("SELECT * FROM purchases ORDER BY purchaseDateEpochDay ASC, id ASC") suspend fun getPurchases(): List<PurchaseEntity>
     @Query("SELECT * FROM purchases WHERE id = :id") suspend fun getPurchase(id: Long): PurchaseEntity?
+    @Query("SELECT * FROM purchases WHERE purchaseOrderId = :orderId ORDER BY id") suspend fun getPurchasesForOrder(orderId: Long): List<PurchaseEntity>
     @Insert suspend fun insertPurchase(value: PurchaseEntity): Long
     @Update suspend fun updatePurchase(value: PurchaseEntity)
+    @Delete suspend fun deletePurchase(value: PurchaseEntity)
 
     @Query("SELECT * FROM sales ORDER BY saleDateEpochDay DESC, id DESC") fun observeSales(): Flow<List<SaleEntity>>
     @Query("SELECT * FROM sales ORDER BY saleDateEpochDay ASC, id ASC") suspend fun getSales(): List<SaleEntity>
@@ -177,6 +208,7 @@ interface AppDao {
     @Query("SELECT * FROM sale_allocations WHERE saleLineId IN (SELECT id FROM sale_lines WHERE saleId = :saleId)") suspend fun getAllocationsForSale(saleId: Long): List<SaleAllocationEntity>
     @Insert suspend fun insertSaleAllocation(value: SaleAllocationEntity): Long
     @Query("DELETE FROM sale_allocations WHERE saleLineId IN (SELECT id FROM sale_lines WHERE saleId = :saleId)") suspend fun deleteAllocationsForSale(saleId: Long)
+    @Query("UPDATE sale_allocations SET unitNetCostPence = :unitCostPence WHERE purchaseId = :purchaseId") suspend fun updateAllocationUnitCostForPurchase(purchaseId: Long, unitCostPence: Long)
 
     @Query("SELECT * FROM sale_returns ORDER BY returnDateEpochDay DESC, id DESC") fun observeSaleReturns(): Flow<List<SaleReturnEntity>>
     @Query("SELECT * FROM sale_returns ORDER BY id") suspend fun getSaleReturns(): List<SaleReturnEntity>
@@ -196,21 +228,53 @@ interface AppDao {
 
 @Database(
     entities = [
-        BusinessEntity::class, CustomerEntity::class, PurchaseEntity::class,
+        BusinessEntity::class, CustomerEntity::class, PurchaseOrderEntity::class, PurchaseEntity::class,
         SaleEntity::class, SaleLineEntity::class, SaleAllocationEntity::class,
         SaleReturnEntity::class, SaleReturnAllocationEntity::class, ExpenseEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun dao(): AppDao
 
     companion object {
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `purchase_orders` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `purchaseDateEpochDay` INTEGER NOT NULL,
+                        `supplier` TEXT NOT NULL,
+                        `orderNumber` TEXT NOT NULL,
+                        `accountUsername` TEXT NOT NULL,
+                        `vatType` TEXT NOT NULL,
+                        `paymentMethod` TEXT NOT NULL,
+                        `invoicePath` TEXT,
+                        `notes` TEXT NOT NULL,
+                        `updatedAtMillis` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("ALTER TABLE `purchases` ADD COLUMN `purchaseOrderId` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_purchases_purchaseOrderId` ON `purchases` (`purchaseOrderId`)")
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO `purchase_orders`
+                    (`id`,`purchaseDateEpochDay`,`supplier`,`orderNumber`,`accountUsername`,`vatType`,`paymentMethod`,`invoicePath`,`notes`,`updatedAtMillis`)
+                    SELECT `id`,`purchaseDateEpochDay`,`supplier`,`orderNumber`,`accountUsername`,`vatType`,`paymentMethod`,`invoicePath`,`notes`,`updatedAtMillis`
+                    FROM `purchases`
+                    """.trimIndent()
+                )
+                db.execSQL("UPDATE `purchases` SET `purchaseOrderId` = `id` WHERE `purchaseOrderId` = 0")
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder(
             context.applicationContext,
             AppDatabase::class.java,
             "purchase-sales.db"
-        ).fallbackToDestructiveMigration().build()
+        ).addMigrations(MIGRATION_1_2).fallbackToDestructiveMigration().build()
     }
 }
