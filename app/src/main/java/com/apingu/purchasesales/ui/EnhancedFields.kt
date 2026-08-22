@@ -50,20 +50,15 @@ fun PurchaseSalesHost(app: PurchaseSalesApplication) {
             .sortedBy { it.lowercase() }
     }
     CompositionLocalProvider(LocalSupplierSuggestions provides suppliers) {
-        /*
-         * Apply physical system-bar safe areas exactly once at the host and mark them consumed.
-         * The app has nested Material Scaffolds (root -> navigation -> screen). Without consuming
-         * the inset here each Scaffold can reserve the status/navigation bar again, creating the
-         * large dead bands visible on tall phones. The real device insets are used, so this also
-         * scales correctly on shorter/smaller Android screens and devices with different cutouts.
-         */
+        /* Apply and consume the real system-bar safe area once. Nested Scaffolds then use the
+           remaining space instead of each reserving the same status/navigation inset again. */
         Box(
             Modifier
                 .fillMaxSize()
                 .windowInsetsPadding(WindowInsets.systemBars)
                 .consumeWindowInsets(WindowInsets.systemBars)
         ) {
-            PurchaseSalesRootV2()
+            PurchaseSalesRootV3()
         }
     }
 }
@@ -150,18 +145,13 @@ private fun SupplierHistoryField(label: String, value: String, onValueChange: (S
     var expanded by remember { mutableStateOf(false) }
     val matches = remember(value, history) {
         val query = value.trim()
-        history.filter { supplier ->
-            query.isBlank() || supplier.contains(query, ignoreCase = true)
-        }.take(8)
+        history.filter { supplier -> query.isBlank() || supplier.contains(query, ignoreCase = true) }.take(8)
     }
 
     Box {
         OutlinedTextField(
             value = value,
-            onValueChange = {
-                onValueChange(it)
-                expanded = true
-            },
+            onValueChange = { onValueChange(it); expanded = true },
             label = { Text(label) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
@@ -171,18 +161,9 @@ private fun SupplierHistoryField(label: String, value: String, onValueChange: (S
                 }
             }
         )
-        DropdownMenu(
-            expanded = expanded && matches.isNotEmpty(),
-            onDismissRequest = { expanded = false }
-        ) {
+        DropdownMenu(expanded = expanded && matches.isNotEmpty(), onDismissRequest = { expanded = false }) {
             matches.forEach { supplier ->
-                DropdownMenuItem(
-                    text = { Text(supplier) },
-                    onClick = {
-                        onValueChange(supplier)
-                        expanded = false
-                    }
-                )
+                DropdownMenuItem(text = { Text(supplier) }, onClick = { onValueChange(supplier); expanded = false })
             }
         }
     }
