@@ -19,6 +19,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
 
     val business = repo.business.map { it ?: BusinessEntity() }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), BusinessEntity())
     val customers = repo.customers.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val purchaseOrders = repo.purchaseOrders.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val purchases = repo.purchases.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val sales = repo.sales.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val saleLines = repo.saleLines.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -53,8 +54,16 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     fun saveBusiness(value: BusinessEntity, onSuccess: () -> Unit = {}) = action("Business details saved", onSuccess) { repo.saveBusiness(value) }
     fun saveCustomer(value: CustomerEntity, onSuccess: () -> Unit = {}) = action("Customer saved", onSuccess) { repo.addCustomer(value) }
     fun deleteCustomer(value: CustomerEntity) = action("Customer deleted") { repo.deleteCustomer(value) }
+
+    fun savePurchaseOrder(value: PurchaseOrderDraft, attachmentUri: Uri?, onSuccess: () -> Unit) =
+        action("Purchase saved", onSuccess) { repo.savePurchaseOrder(value, attachmentUri) }
+
+    fun markReceivedAllOrder(orderId: Long) = action("Purchase received") { repo.markReceivedAllOrder(orderId) }
+
+    // Legacy V1 entry points retained for source compatibility with the original screen.
     fun savePurchase(value: PurchaseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) = action("Purchase saved", onSuccess) { repo.savePurchase(value, attachmentUri) }
     fun markReceivedAll(value: PurchaseEntity) = action("Purchase received") { repo.markReceivedAll(value) }
+
     fun saveSale(value: SaleDraft, onSuccess: () -> Unit) = action("Invoice generated", onSuccess) { repo.saveSale(value) }
     fun recordReturn(lineId: Long, day: Long, qty: Int, restock: Boolean, notes: String, onSuccess: () -> Unit = {}) = action("Customer return recorded", onSuccess) { repo.recordCustomerReturn(lineId, day, qty, restock, notes) }
     fun saveExpense(value: ExpenseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) = action("Expense saved", onSuccess) { repo.saveExpense(value, attachmentUri) }
