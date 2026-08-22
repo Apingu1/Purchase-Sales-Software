@@ -5,6 +5,9 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
+val ciVersionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
+val ciKeystorePath = System.getenv("PURCHASE_SALES_KEYSTORE_PATH")
+
 android {
     namespace = "com.apingu.purchasesales"
     compileSdk = 35
@@ -13,14 +16,33 @@ android {
         applicationId = "com.apingu.purchasesales"
         minSdk = 28
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = ciVersionCode ?: 2
+        versionName = if (ciVersionCode != null) "1.1.$ciVersionCode" else "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
     }
 
+    signingConfigs {
+        if (!ciKeystorePath.isNullOrBlank()) {
+            create("ciUpdate") {
+                storeFile = file(ciKeystorePath)
+                storePassword = System.getenv("PURCHASE_SALES_KEYSTORE_PASSWORD") ?: "purchasesales-ci"
+                keyAlias = System.getenv("PURCHASE_SALES_KEY_ALIAS") ?: "purchasesales"
+                keyPassword = System.getenv("PURCHASE_SALES_KEY_PASSWORD") ?: "purchasesales-ci"
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (!ciKeystorePath.isNullOrBlank()) {
+                signingConfig = signingConfigs.getByName("ciUpdate")
+            }
+        }
         release {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
