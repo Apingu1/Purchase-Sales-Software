@@ -49,6 +49,12 @@ fun compactDate(day: Long): String = dateFromEpoch(day).format(DateTimeFormatter
 fun parseDateOrToday(text: String): Long = runCatching { LocalDate.parse(text, DateTimeFormatter.ofPattern("dd/MM/yyyy")).toEpochDay() }.getOrElse { epochDayToday() }
 fun editDate(day: Long): String = dateFromEpoch(day).format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
 
+/** A partial price-adjustment refund reduces cost without removing physical stock. */
+fun effectivePurchaseNetPence(purchase: PurchaseEntity): Long =
+    (purchase.netPence - if (purchase.partialRefund) purchase.refundNetPence else 0).coerceAtLeast(0)
+
+fun supplierRefundGrossPence(purchase: PurchaseEntity): Long =
+    if (purchase.partialRefund) purchase.refundNetPence + purchase.refundVatPence else purchase.refundExpectedPence
 
 data class InventoryRow(val item: String, val purchased: Int, val received: Int, val supplierReturned: Int, val sold: Int, val customerRestocked: Int, val available: Int, val inventoryNetCostPence: Long)
 
@@ -89,7 +95,7 @@ fun buildInventory(
         val available = received - supplierReturned - sold + restored
         val value = ps.sumOf { p ->
             val pAvail = p.receivedQty - p.returnedQty - (soldByPurchase[p.id] ?: 0) + (restoredByPurchase[p.id] ?: 0)
-            val unitNet = if (p.quantity > 0) p.netPence / p.quantity else 0
+            val unitNet = if (p.quantity > 0) effectivePurchaseNetPence(p) / p.quantity else 0
             pAvail.coerceAtLeast(0) * unitNet
         }
         InventoryRow(name, purchased, received, supplierReturned, sold, restored, available, value)
@@ -119,13 +125,18 @@ fun buildFinanceSummary(
     val salesNet = s.sumOf { it.netPence } - salesReturnNet
     val expensesNet = e.sumOf { it.netPence }
     val outputVat = s.sumOf { it.vatPence } - salesReturnVat
-    val supplierRefundVat = p.sumOf { purchase ->
-        val creditGross = purchase.refundExpectedPence.takeIf { it > 0 } ?: 0
-        if (creditGross > 0) breakdownFromGross(creditGross.coerceAtMost(purchase.grossPence), purchase.vatType).vatPence else 0
-    }
+
+    // Supplier credits use the explicitly recorded VAT component. This is intentionally NOT
+    // inferred from the refund total because suppliers can issue a net-only partial credit.
+    val supplierRefundVat = p.sumOf { it.refundVatPence.coerceAtMost(it.vatPence) }
     val supplierReverseCredit = p.sumOf { purchase ->
-        val creditGross = purchase.refundExpectedPence.takeIf { it > 0 } ?: 0
-        if (creditGross > 0) breakdownFromGross(creditGross.coerceAtMost(purchase.grossPence), purchase.vatType).reverseVatPence else 0
+        if (purchase.vatType != VatTypes.REVERSE) 0L
+        else if (purchase.partialRefund) {
+            BigDecimal(purchase.refundNetPence).multiply(BigDecimal("0.20")).setScale(0, RoundingMode.HALF_UP).longValueExact()
+        } else {
+            val creditGross = purchase.refundExpectedPence.coerceAtMost(purchase.grossPence)
+            if (creditGross > 0) breakdownFromGross(creditGross, VatTypes.REVERSE).reverseVatPence else 0
+        }
     }
     val inputVat = p.sumOf { it.vatPence } - supplierRefundVat + e.sumOf { it.vatPence }
     val reverseInput = p.sumOf { it.reverseVatPence } - supplierReverseCredit + e.sumOf { it.reverseVatPence }
