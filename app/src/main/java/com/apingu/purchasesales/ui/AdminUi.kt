@@ -14,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -115,13 +116,41 @@ fun DocumentsScreen(vm: AppViewModel, nav: NavHostController) {
 @Composable
 fun BusinessScreen(vm: AppViewModel, nav: NavHostController) {
     val b by vm.business.collectAsStateWithLifecycle()
+    val uriHandler = LocalUriHandler.current
+    var showDropboxTokenHelp by remember { mutableStateOf(false) }
     var name by remember(b) { mutableStateOf(b.businessName) }; var address by remember(b) { mutableStateOf(b.address) }; var vat by remember(b) { mutableStateOf(b.vatNumber) }; var company by remember(b) { mutableStateOf(b.companyNumber) }; var email by remember(b) { mutableStateOf(b.email) }; var phone by remember(b) { mutableStateOf(b.phone) }; var bank by remember(b) { mutableStateOf(b.bankDetails) }; var terms by remember(b) { mutableStateOf(b.invoiceTerms) }; var footer by remember(b) { mutableStateOf(b.invoiceFooter) }; var start by remember(b) { mutableStateOf(if (b.accountingStartEpochDay > 0) editDate(b.accountingStartEpochDay) else editDate(LocalDate.now().withDayOfYear(1).toEpochDay())) }; var end by remember(b) { mutableStateOf(if (b.accountingEndEpochDay > 0) editDate(b.accountingEndEpochDay) else editDate(LocalDate.now().withMonth(12).withDayOfMonth(31).toEpochDay())) }; var dbToken by remember(b) { mutableStateOf(b.dropboxAccessToken) }; var dbKey by remember(b) { mutableStateOf(b.dropboxAppKey) }; var dbRefresh by remember(b) { mutableStateOf(b.dropboxRefreshToken) }; var dbRoot by remember(b) { mutableStateOf(b.dropboxRoot) }; var auto by remember(b) { mutableStateOf(b.dropboxAutoSync) }
     ScreenScaffold("Business Details", onBack = { nav.popBackStack() }) { inner -> Column(Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         FormField("Business name", name, { name = it }); FormField("Business address", address, { address = it }, singleLine = false); FormField("VAT number", vat, { vat = it }); FormField("Company number", company, { company = it }); FormField("Email", email, { email = it }); FormField("Phone", phone, { phone = it }); FormField("Bank/payment details for invoices", bank, { bank = it }, singleLine = false); FormField("Invoice terms", terms, { terms = it }); FormField("Invoice footer", footer, { footer = it }, singleLine = false)
         HorizontalDivider(); Text("Accounting period", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); FormField("Period start (DD/MM/YYYY)", start, { start = it }); FormField("Period end (DD/MM/YYYY)", end, { end = it })
-        HorizontalDivider(); Text("Dropbox", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); Text("Use an access token, or App Key + refresh token for persistent background sync.", style = MaterialTheme.typography.bodySmall); FormField("Dropbox access token", dbToken, { dbToken = it }); FormField("Dropbox App Key (optional)", dbKey, { dbKey = it }); FormField("Dropbox refresh token (optional)", dbRefresh, { dbRefresh = it }); FormField("Dropbox root folder", dbRoot, { dbRoot = it }); Row(verticalAlignment = Alignment.CenterVertically) { Switch(auto, { auto = it }); Spacer(Modifier.width(10.dp)); Text("Automatic Dropbox sync") }
+        HorizontalDivider(); Text("Dropbox", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); Text("The simplest setup is to paste a generated Dropbox access token for your own account.", style = MaterialTheme.typography.bodySmall)
+        TextButton(onClick = { showDropboxTokenHelp = true }, contentPadding = PaddingValues(0.dp)) { Icon(Icons.Default.HelpOutline, null); Spacer(Modifier.width(6.dp)); Text("How do I get an access token?") }
+        FormField("Dropbox access token", dbToken, { dbToken = it }); FormField("Dropbox App Key (optional)", dbKey, { dbKey = it }); FormField("Dropbox refresh token (optional)", dbRefresh, { dbRefresh = it }); FormField("Dropbox root folder", dbRoot, { dbRoot = it }); Row(verticalAlignment = Alignment.CenterVertically) { Switch(auto, { auto = it }); Spacer(Modifier.width(10.dp)); Text("Automatic Dropbox sync") }
         Button({ vm.saveBusiness(BusinessEntity(1, name, address, vat, company, email, phone, bank, terms, footer, parseDateOrToday(start), parseDateOrToday(end), dbToken, dbKey, dbRefresh, dbRoot, auto)) { nav.popBackStack() } }, Modifier.fillMaxWidth()) { Icon(Icons.Default.Save, null); Text(" Save business details") }; Spacer(Modifier.height(20.dp))
     } }
+
+    if (showDropboxTokenHelp) {
+        AlertDialog(
+            onDismissRequest = { showDropboxTokenHelp = false },
+            title = { Text("Get a Dropbox access token") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("This is the simple method for syncing this app to your own Dropbox account.")
+                    Text("1. Open the Dropbox App Console and sign in.")
+                    Text("2. Open your existing app. If you do not have one, choose Create app, use Scoped access and App folder access, then give the app a name.")
+                    Text("3. Open the Permissions tab. Enable files.content.write and save/submit the permission change.")
+                    Text("4. Open the Settings tab and scroll to the OAuth 2 section.")
+                    Text("5. Under Generated access token, tap Generate.")
+                    Text("6. Copy the generated token and paste it into Dropbox access token on this Business Details screen.")
+                    Text("7. Turn on Automatic Dropbox sync and save your Business Details. You can then use Sync now in Documents & Dropbox.")
+                    Text("Generated access tokens are intended for your own account/testing. If Dropbox later rejects or expires the token, generate a new one and replace the old token here.", style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = { uriHandler.openUri("https://www.dropbox.com/developers/apps") }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.OpenInNew, null); Spacer(Modifier.width(6.dp)); Text("Open Dropbox App Console")
+                    }
+                }
+            },
+            confirmButton = { TextButton({ showDropboxTokenHelp = false }) { Text("Done") } }
+        )
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
