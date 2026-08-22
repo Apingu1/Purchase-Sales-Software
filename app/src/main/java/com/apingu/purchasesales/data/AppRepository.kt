@@ -8,7 +8,7 @@ import com.apingu.purchasesales.util.*
 import kotlinx.coroutines.flow.Flow
 import java.time.LocalDate
 
-
+/** Legacy single-line draft retained so the original V1 screen remains source-compatible. */
 data class PurchaseDraft(
     val id: Long = 0,
     val dateEpochDay: Long,
@@ -26,6 +26,31 @@ data class PurchaseDraft(
     val refundExpectedPence: Long,
     val refundReceivedPence: Long,
     val notes: String,
+    val existingInvoicePath: String? = null
+)
+
+data class PurchaseItemDraft(
+    val id: Long = 0,
+    val item: String,
+    val quantity: Int,
+    val grossPence: Long,
+    val receivedQty: Int = 0,
+    val cancelledQty: Int = 0,
+    val returnedQty: Int = 0,
+    val refundExpectedPence: Long = 0,
+    val refundReceivedPence: Long = 0
+)
+
+data class PurchaseOrderDraft(
+    val id: Long = 0,
+    val dateEpochDay: Long,
+    val supplier: String,
+    val orderNumber: String,
+    val accountUsername: String,
+    val vatType: String,
+    val paymentMethod: String,
+    val notes: String,
+    val items: List<PurchaseItemDraft>,
     val existingInvoicePath: String? = null
 )
 
@@ -48,6 +73,7 @@ data class ExpenseDraft(
 data class FullData(
     val business: BusinessEntity,
     val customers: List<CustomerEntity>,
+    val purchaseOrders: List<PurchaseOrderEntity>,
     val purchases: List<PurchaseEntity>,
     val sales: List<SaleEntity>,
     val saleLines: List<SaleLineEntity>,
@@ -62,6 +88,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
 
     val business: Flow<BusinessEntity?> = dao.observeBusiness()
     val customers = dao.observeCustomers()
+    val purchaseOrders = dao.observePurchaseOrders()
     val purchases = dao.observePurchases()
     val sales = dao.observeSales()
     val saleLines = dao.observeSaleLines()
@@ -83,81 +110,237 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     }
 
     suspend fun saveBusiness(value: BusinessEntity) { dao.saveBusiness(value); enqueueSync() }
+
     suspend fun addCustomer(value: CustomerEntity): Long {
         require(value.companyName.isNotBlank()) { "Customer name is required" }
         require(value.invoiceCode.trim().length in 2..5) { "Customer invoice code must be 2–5 characters" }
         val normalized = value.copy(invoiceCode = value.invoiceCode.trim().uppercase())
         return if (value.id == 0L) dao.insertCustomer(normalized) else { dao.updateCustomer(normalized); value.id }
     }
+
     suspend fun deleteCustomer(value: CustomerEntity) = dao.deleteCustomer(value)
 
-    suspend fun savePurchase(draft: PurchaseDraft, attachmentUri: Uri? = null): Long {
+    /**
+     * Saves one purchase/order header and all of its item lines atomically.
+     * Each PurchaseEntity remains an independent inventory lot so different items in the same
+     * supplier order can be received/cancelled/returned independently and keep their own cost.
+     */
+    suspend fun savePurchaseOrder(draft: PurchaseOrderDraft, attachmentUri: Uri? = null): Long {
         require(draft.supplier.isNotBlank()) { "Supplier/store is required" }
-        require(draft.item.isNotBlank()) { "Item is required" }
-        require(draft.quantity > 0) { "Quantity must be greater than zero" }
-        require(draft.receivedQty >= 0 && draft.cancelledQty >= 0 && draft.returnedQty >= 0) { "Quantities cannot be negative" }
-        require(draft.receivedQty <= draft.quantity) { "Received quantity cannot exceed purchased quantity" }
-        require(draft.cancelledQty <= draft.quantity - draft.receivedQty) { "Cancelled quantity exceeds the outstanding quantity" }
-        require(draft.returnedQty <= draft.receivedQty) { "Returned quantity cannot exceed received quantity" }
-        if (draft.id > 0) {
-            val allocations = dao.getSaleAllocations().filter { it.purchaseId == draft.id }
-            val allocationIds = allocations.map { it.id }.toSet()
-            val restored = dao.getSaleReturnAllocations().filter { it.saleAllocationId in allocationIds }.sumOf { it.quantity }
-            val sold = allocations.sumOf { it.quantity } - restored
-            require(draft.returnedQty <= draft.receivedQty - sold) { "Supplier return exceeds stock still available from this purchase" }
+        require(draft.items.isNotEmpty()) { "Add at least one item" }
+        draft.items.forEach(::validatePurchaseItem)
+
+        val copiedInvoice = attachmentUri?.let {
+            DocumentStore.copyIntoApp(context, it, "PUR_ORDER_${draft.id.takeIf { n -> n > 0 } ?: "NEW"}")
         }
-        val vat = breakdownFromGross(draft.grossPence, draft.vatType)
-        val invoicePath = attachmentUri?.let { DocumentStore.copyIntoApp(context, it, "PUR_${draft.id.takeIf { n -> n > 0 } ?: "NEW"}") } ?: draft.existingInvoicePath
-        val status = derivePurchaseStatus(draft)
-        val entity = PurchaseEntity(
-            id = draft.id,
-            purchaseDateEpochDay = draft.dateEpochDay,
-            supplier = draft.supplier.trim(),
-            item = draft.item.trim(),
+
+        val orderId = db.withTransaction {
+            val existingOrder = if (draft.id > 0) dao.getPurchaseOrder(draft.id) else null
+            if (draft.id > 0) requireNotNull(existingOrder) { "Purchase order not found" }
+
+            val invoicePath = copiedInvoice ?: draft.existingInvoicePath ?: existingOrder?.invoicePath
+            val now = System.currentTimeMillis()
+            val header = PurchaseOrderEntity(
+                id = draft.id,
+                purchaseDateEpochDay = draft.dateEpochDay,
+                supplier = draft.supplier.trim(),
+                orderNumber = draft.orderNumber.trim(),
+                accountUsername = draft.accountUsername.trim(),
+                vatType = draft.vatType,
+                paymentMethod = draft.paymentMethod.trim(),
+                invoicePath = invoicePath,
+                notes = draft.notes.trim(),
+                updatedAtMillis = now
+            )
+            val savedOrderId = if (existingOrder == null) dao.insertPurchaseOrder(header) else {
+                dao.updatePurchaseOrder(header)
+                header.id
+            }
+
+            val existingLines = if (existingOrder == null) emptyList() else dao.getPurchasesForOrder(savedOrderId)
+            val existingById = existingLines.associateBy { it.id }
+            val requestedIds = draft.items.filter { it.id > 0 }.map { it.id }
+            require(requestedIds.size == requestedIds.distinct().size) { "Duplicate purchase line" }
+            requestedIds.forEach { require(it in existingById) { "Purchase line does not belong to this order" } }
+
+            val allAllocations = dao.getSaleAllocations()
+            val allReturnAllocations = dao.getSaleReturnAllocations()
+            val allocationById = allAllocations.associateBy { it.id }
+
+            existingLines.filter { old -> old.id !in requestedIds }.forEach { old ->
+                require(allAllocations.none { it.purchaseId == old.id }) {
+                    "${old.item} has sales history and cannot be removed from the purchase. Adjust its quantities instead."
+                }
+                dao.deletePurchase(old)
+            }
+
+            draft.items.forEachIndexed { index, itemDraft ->
+                val old = existingById[itemDraft.id]
+                val lineAllocations = if (old == null) emptyList() else allAllocations.filter { it.purchaseId == old.id }
+                if (old != null && lineAllocations.isNotEmpty()) {
+                    require(old.item.trim().equals(itemDraft.item.trim(), ignoreCase = true)) {
+                        "${old.item} has sales history, so its item name cannot be changed"
+                    }
+                    val allocationIds = lineAllocations.map { it.id }.toSet()
+                    val restored = allReturnAllocations
+                        .filter { it.saleAllocationId in allocationIds }
+                        .sumOf { it.quantity }
+                    val netSold = lineAllocations.sumOf { it.quantity } - restored
+                    require(itemDraft.receivedQty - itemDraft.returnedQty >= netSold) {
+                        "${old.item} has $netSold unit(s) allocated to sales; received/returned quantities cannot reduce available stock below that"
+                    }
+                }
+
+                val vat = breakdownFromGross(itemDraft.grossPence, draft.vatType)
+                val lineStatus = derivePurchaseStatus(
+                    itemDraft.quantity,
+                    itemDraft.receivedQty,
+                    itemDraft.cancelledQty,
+                    itemDraft.returnedQty,
+                    itemDraft.refundExpectedPence,
+                    itemDraft.refundReceivedPence
+                )
+                val line = PurchaseEntity(
+                    id = itemDraft.id,
+                    purchaseOrderId = savedOrderId,
+                    purchaseDateEpochDay = draft.dateEpochDay,
+                    supplier = draft.supplier.trim(),
+                    item = itemDraft.item.trim(),
+                    quantity = itemDraft.quantity,
+                    orderNumber = draft.orderNumber.trim(),
+                    accountUsername = draft.accountUsername.trim(),
+                    grossPence = vat.grossPence,
+                    netPence = vat.netPence,
+                    vatPence = vat.vatPence,
+                    reverseVatPence = vat.reverseVatPence,
+                    vatType = draft.vatType,
+                    paymentMethod = draft.paymentMethod.trim(),
+                    status = lineStatus,
+                    receivedQty = itemDraft.receivedQty,
+                    cancelledQty = itemDraft.cancelledQty,
+                    returnedQty = itemDraft.returnedQty,
+                    refundExpectedPence = itemDraft.refundExpectedPence,
+                    refundReceivedPence = itemDraft.refundReceivedPence,
+                    // One physical supplier invoice belongs to the order. Keep a single line reference
+                    // for compatibility with the existing document exporter and Dropbox uploader.
+                    invoicePath = if (index == 0) invoicePath else null,
+                    notes = draft.notes.trim(),
+                    updatedAtMillis = now
+                )
+                val lineId = if (old == null) dao.insertPurchase(line) else {
+                    dao.updatePurchase(line)
+                    line.id
+                }
+                val unitNet = if (itemDraft.quantity > 0) vat.netPence / itemDraft.quantity else 0
+                dao.updateAllocationUnitCostForPurchase(lineId, unitNet)
+            }
+            savedOrderId
+        }
+        enqueueSync()
+        return orderId
+    }
+
+    private fun validatePurchaseItem(item: PurchaseItemDraft) {
+        require(item.item.isNotBlank()) { "Each purchase line needs an item" }
+        require(item.quantity > 0) { "Quantity must be greater than zero" }
+        require(item.grossPence >= 0) { "Gross cost cannot be negative" }
+        require(item.receivedQty >= 0 && item.cancelledQty >= 0 && item.returnedQty >= 0) { "Quantities cannot be negative" }
+        require(item.receivedQty <= item.quantity) { "Received quantity cannot exceed purchased quantity for ${item.item}" }
+        require(item.cancelledQty <= item.quantity - item.receivedQty) { "Cancelled quantity exceeds the outstanding quantity for ${item.item}" }
+        require(item.returnedQty <= item.receivedQty) { "Returned quantity cannot exceed received quantity for ${item.item}" }
+        require(item.refundExpectedPence >= 0 && item.refundReceivedPence >= 0) { "Refund values cannot be negative" }
+    }
+
+    private fun derivePurchaseStatus(
+        quantity: Int,
+        receivedQty: Int,
+        cancelledQty: Int,
+        returnedQty: Int,
+        refundExpectedPence: Long,
+        refundReceivedPence: Long
+    ): String = when {
+        refundExpectedPence > 0 && refundReceivedPence >= refundExpectedPence -> "REFUND_RECEIVED"
+        refundExpectedPence > refundReceivedPence -> "REFUND_PENDING"
+        returnedQty > 0 && returnedQty >= receivedQty && receivedQty > 0 -> "RETURNED"
+        cancelledQty >= quantity -> "CANCELLED"
+        receivedQty <= 0 -> "RECEIPT_PENDING"
+        receivedQty + cancelledQty < quantity -> "PARTIALLY_RECEIVED"
+        else -> "RECEIVED"
+    }
+
+    /** Legacy one-item entry adapter. */
+    suspend fun savePurchase(draft: PurchaseDraft, attachmentUri: Uri? = null): Long {
+        val existing = if (draft.id > 0) dao.getPurchase(draft.id) else null
+        val orderId = existing?.purchaseOrderId?.takeIf { it > 0 } ?: 0L
+        val header = if (orderId > 0) dao.getPurchaseOrder(orderId) else null
+        val currentLines = if (orderId > 0) dao.getPurchasesForOrder(orderId) else emptyList()
+        val replacement = PurchaseItemDraft(
+            id = existing?.id ?: 0,
+            item = draft.item,
             quantity = draft.quantity,
-            orderNumber = draft.orderNumber.trim(),
-            accountUsername = draft.accountUsername.trim(),
-            grossPence = vat.grossPence,
-            netPence = vat.netPence,
-            vatPence = vat.vatPence,
-            reverseVatPence = vat.reverseVatPence,
-            vatType = draft.vatType,
-            paymentMethod = draft.paymentMethod.trim(),
-            status = status,
+            grossPence = draft.grossPence,
             receivedQty = draft.receivedQty,
             cancelledQty = draft.cancelledQty,
             returnedQty = draft.returnedQty,
             refundExpectedPence = draft.refundExpectedPence,
-            refundReceivedPence = draft.refundReceivedPence,
-            invoicePath = invoicePath,
-            notes = draft.notes.trim(),
-            updatedAtMillis = System.currentTimeMillis()
+            refundReceivedPence = draft.refundReceivedPence
         )
-        val id = if (draft.id == 0L) dao.insertPurchase(entity) else { dao.updatePurchase(entity); draft.id }
-        enqueueSync()
-        return id
+        val itemDrafts = if (existing == null) listOf(replacement) else currentLines.map { line ->
+            if (line.id == existing.id) replacement else PurchaseItemDraft(
+                id = line.id,
+                item = line.item,
+                quantity = line.quantity,
+                grossPence = line.grossPence,
+                receivedQty = line.receivedQty,
+                cancelledQty = line.cancelledQty,
+                returnedQty = line.returnedQty,
+                refundExpectedPence = line.refundExpectedPence,
+                refundReceivedPence = line.refundReceivedPence
+            )
+        }
+        val savedOrderId = savePurchaseOrder(
+            PurchaseOrderDraft(
+                id = header?.id ?: 0,
+                dateEpochDay = draft.dateEpochDay,
+                supplier = draft.supplier,
+                orderNumber = draft.orderNumber,
+                accountUsername = draft.accountUsername,
+                vatType = draft.vatType,
+                paymentMethod = draft.paymentMethod,
+                notes = draft.notes,
+                items = itemDrafts,
+                existingInvoicePath = header?.invoicePath ?: draft.existingInvoicePath
+            ),
+            attachmentUri
+        )
+        return if (existing != null) existing.id else dao.getPurchasesForOrder(savedOrderId).first().id
     }
 
-    private fun derivePurchaseStatus(d: PurchaseDraft): String = when {
-        d.refundExpectedPence > 0 && d.refundReceivedPence >= d.refundExpectedPence -> "REFUND_RECEIVED"
-        d.refundExpectedPence > d.refundReceivedPence -> "REFUND_PENDING"
-        d.returnedQty > 0 && d.returnedQty >= d.receivedQty && d.receivedQty > 0 -> "RETURNED"
-        d.cancelledQty >= d.quantity -> "CANCELLED"
-        d.receivedQty <= 0 -> "RECEIPT_PENDING"
-        d.receivedQty + d.cancelledQty < d.quantity -> "PARTIALLY_RECEIVED"
-        else -> "RECEIVED"
+    suspend fun markReceivedAllOrder(orderId: Long) {
+        db.withTransaction {
+            val lines = dao.getPurchasesForOrder(orderId)
+            require(lines.isNotEmpty()) { "Purchase order not found" }
+            lines.forEach { line ->
+                val received = (line.quantity - line.cancelledQty).coerceAtLeast(0)
+                val returned = line.returnedQty.coerceAtMost(received)
+                dao.updatePurchase(
+                    line.copy(
+                        receivedQty = received,
+                        returnedQty = returned,
+                        status = derivePurchaseStatus(
+                            line.quantity, received, line.cancelledQty, returned,
+                            line.refundExpectedPence, line.refundReceivedPence
+                        ),
+                        updatedAtMillis = System.currentTimeMillis()
+                    )
+                )
+            }
+        }
+        enqueueSync()
     }
 
     suspend fun markReceivedAll(purchase: PurchaseEntity) {
-        val received = (purchase.quantity - purchase.cancelledQty).coerceAtLeast(0)
-        savePurchase(
-            PurchaseDraft(
-                purchase.id, purchase.purchaseDateEpochDay, purchase.supplier, purchase.item, purchase.quantity,
-                purchase.orderNumber, purchase.accountUsername, purchase.grossPence, purchase.vatType, purchase.paymentMethod,
-                received, purchase.cancelledQty, purchase.returnedQty.coerceAtMost(received), purchase.refundExpectedPence,
-                purchase.refundReceivedPence, purchase.notes, purchase.invoicePath
-            )
-        )
+        markReceivedAllOrder(purchase.purchaseOrderId.takeIf { it > 0 } ?: purchase.id)
     }
 
     suspend fun saveExpense(draft: ExpenseDraft, attachmentUri: Uri? = null): Long {
@@ -314,6 +497,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     suspend fun getFullData(): FullData = FullData(
         business = dao.getBusiness() ?: BusinessEntity(),
         customers = dao.getCustomers(),
+        purchaseOrders = dao.getPurchaseOrders(),
         purchases = dao.getPurchases(),
         sales = dao.getSales(),
         saleLines = dao.getSaleLines(),
