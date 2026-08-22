@@ -77,7 +77,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
         val temp = File(context.cacheDir, "Business_Records.xlsx")
         XlsxExport.create(
             temp,
-            data.purchases.filter { it.purchaseDateEpochDay in start..end },
+            data.purchases.filter { it.purchaseDateEpochDay in start..end && !isCancelledAndFullyRefundedPurchase(it) },
             data.sales.filter { it.saleDateEpochDay in start..end },
             data.saleLines,
             data.saleReturns.filter { it.returnDateEpochDay in start..end },
