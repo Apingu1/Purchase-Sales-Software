@@ -2,8 +2,7 @@ package com.apingu.purchasesales.sync
 
 import android.content.Context
 import androidx.work.*
-import com.apingu.purchasesales.data.AppDatabase
-import com.apingu.purchasesales.data.BusinessEntity
+import com.apingu.purchasesales.data.*
 import com.apingu.purchasesales.util.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -27,6 +26,7 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
             }
             if (token.isBlank()) return@withContext Result.success()
 
+            val periods = dao.getAccountingPeriods()
             val purchases = dao.getPurchases()
             val customers = dao.getCustomers()
             val sales = dao.getSales()
@@ -35,13 +35,10 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
             val returns = dao.getSaleReturns()
             val returnAllocations = dao.getSaleReturnAllocations()
             val expenses = dao.getExpenses()
-            val start = business.accountingStartEpochDay.takeIf { it > 0 } ?: LocalDate.now().withDayOfYear(1).toEpochDay()
-            val end = business.accountingEndEpochDay.takeIf { it >= start } ?: LocalDate.now().withMonth(12).withDayOfMonth(31).toEpochDay()
-            val summary = buildFinanceSummary(start, end, purchases, sales, saleLines, allocations, returns, returnAllocations, expenses)
             val inv = buildInventory(purchases, allocations, returnAllocations)
-            val label = accountingLabel(business)
             val root = "/" + business.dropboxRoot.trim().trim('/').ifBlank { "Purchase-Sales-Software" }
 
+            // Recovery and inventory remain global/all-time by design.
             val recoveryDir = File(applicationContext.filesDir, "recovery").apply { mkdirs() }
             val allPurchases = File(recoveryDir, "PURCHASES.txt").apply { writeText(purchasesDump(purchases)) }
             val pending = File(recoveryDir, "PENDING_PURCHASES.txt").apply { writeText(pendingDump(purchases)) }
@@ -51,43 +48,68 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
             DropboxApi.upload(token, "$root/Recovery/INVENTORY.txt", inventory.readBytes())
 
             val exportDir = File(applicationContext.filesDir, "exports").apply { mkdirs() }
-            val xlsx = File(exportDir, "Business_Records_${label}.xlsx")
-            XlsxExport.create(
-                xlsx,
-                purchases.filter { it.purchaseDateEpochDay in start..end && !isCancelledAndFullyRefundedPurchase(it) },
-                sales.filter { it.saleDateEpochDay in start..end },
-                saleLines,
-                returns.filter { it.returnDateEpochDay in start..end },
-                customers,
-                expenses.filter { it.expenseDateEpochDay in start..end },
-                summary
-            )
-            DropboxApi.upload(token, "$root/Excel/$label/${xlsx.name}", xlsx.readBytes())
 
-            // Purchase invoices are order-level documents. If every line on an order has been
-            // cancelled and fully refunded, remove the previously synced Dropbox copy instead of
-            // uploading it again. Mixed orders keep their invoice until the whole order is voided.
-            val purchaseOrderGroups = purchases.groupBy { p ->
-                p.purchaseOrderId.takeIf { it > 0 } ?: -p.id
-            }
-            purchaseOrderGroups.values.forEach { lines ->
-                val voidedOrder = isCancelledAndFullyRefundedOrder(lines)
-                lines.forEach { p -> p.invoicePath?.let { path ->
-                    val f = File(path)
-                    val remotePath = "$root/Purchases/$label/Invoices/PUR_${p.id}_${safe(p.item)}.${f.extension.ifBlank { "bin" }}"
-                    if (voidedOrder) {
-                        DropboxApi.deleteIfExists(token, remotePath)
-                    } else if (f.exists()) {
-                        DropboxApi.upload(token, remotePath, f.readBytes())
+            // Every accounting period receives its own workbook and document tree. Transaction date
+            // determines the folder automatically, so purchases/sales from different periods never mix.
+            periods.forEach { period ->
+                val periodRoot = "$root/Accounting Periods/${safePeriod(period)}"
+                val periodPurchases = purchases.filter { it.purchaseDateEpochDay in period.startEpochDay..period.endEpochDay }
+                val periodSales = sales.filter { it.saleDateEpochDay in period.startEpochDay..period.endEpochDay }
+                val periodReturns = returns.filter { it.returnDateEpochDay in period.startEpochDay..period.endEpochDay }
+                val periodExpenses = expenses.filter { it.expenseDateEpochDay in period.startEpochDay..period.endEpochDay }
+                val summary = buildFinanceSummary(
+                    period.startEpochDay,
+                    period.endEpochDay,
+                    purchases,
+                    sales,
+                    saleLines,
+                    allocations,
+                    returns,
+                    returnAllocations,
+                    expenses
+                )
+
+                val xlsx = File(exportDir, "Business_Records_${safePeriod(period)}.xlsx")
+                XlsxExport.create(
+                    xlsx,
+                    periodPurchases.filter { !isCancelledAndFullyRefundedPurchase(it) },
+                    periodSales,
+                    saleLines,
+                    periodReturns,
+                    customers,
+                    periodExpenses,
+                    summary
+                )
+                DropboxApi.upload(token, "$periodRoot/Excel/${xlsx.name}", xlsx.readBytes())
+
+                val purchaseOrderGroups = periodPurchases.groupBy { p -> p.purchaseOrderId.takeIf { it > 0 } ?: -p.id }
+                purchaseOrderGroups.values.forEach { lines ->
+                    val voidedOrder = isFullyRefundedOrderForDropbox(lines)
+                    lines.forEach { p ->
+                        p.invoicePath?.let { path ->
+                            val f = File(path)
+                            val remotePath = "$periodRoot/Purchases/Invoices/PUR_${p.id}_${safe(p.item)}.${f.extension.ifBlank { "bin" }}"
+                            if (voidedOrder) DropboxApi.deleteIfExists(token, remotePath)
+                            else if (f.exists()) DropboxApi.upload(token, remotePath, f.readBytes())
+                        }
                     }
-                } }
+                }
+
+                periodSales.forEach { s ->
+                    s.pdfPath?.let { path ->
+                        val f = File(path)
+                        if (f.exists()) DropboxApi.upload(token, "$periodRoot/Sales/Invoices/${s.invoiceNo}.pdf", f.readBytes())
+                    }
+                }
+
+                periodExpenses.forEach { e ->
+                    e.attachmentPath?.let { path ->
+                        val f = File(path)
+                        if (f.exists()) DropboxApi.upload(token, "$periodRoot/Expenses/Receipts/EXP_${e.id}_${safe(e.details)}.${f.extension.ifBlank { "bin" }}", f.readBytes())
+                    }
+                }
             }
-            sales.forEach { s -> s.pdfPath?.let { path ->
-                val f = File(path); if (f.exists()) DropboxApi.upload(token, "$root/Sales/$label/Invoices/${s.invoiceNo}.pdf", f.readBytes())
-            } }
-            expenses.forEach { e -> e.attachmentPath?.let { path ->
-                val f = File(path); if (f.exists()) DropboxApi.upload(token, "$root/Expenses/$label/Receipts/EXP_${e.id}_${safe(e.details)}.${f.extension.ifBlank { "bin" }}", f.readBytes())
-            } }
+
             db.close()
             Result.success()
         } catch (_: Exception) {
@@ -140,7 +162,6 @@ object DropboxApi {
         conn.outputStream.use { it.write("{\"path\":\"${json(path)}\"}".toByteArray()) }
         val response = readResponse(conn)
         if (conn.responseCode in 200..299) return
-        // Deletion is idempotent for sync purposes. Dropbox reports a missing path as a 409.
         if (conn.responseCode == 409 && response.contains("not_found", ignoreCase = true)) return
         error("Dropbox delete failed: $response")
     }
@@ -153,13 +174,12 @@ object DropboxApi {
     private fun json(v: String) = v.replace("\\", "\\\\").replace("\"", "\\\"")
 }
 
-private fun accountingLabel(b: BusinessEntity): String {
-    val start = runCatching { LocalDate.ofEpochDay(b.accountingStartEpochDay) }.getOrElse { LocalDate.now() }
-    val end = runCatching { LocalDate.ofEpochDay(b.accountingEndEpochDay) }.getOrElse { start }
-    return if (start.year == end.year) start.year.toString() else "${start.year}-${end.year}"
+private fun safePeriod(period: AccountingPeriodEntity): String {
+    val name = safe(period.name).ifBlank { "Accounting_Period" }
+    return name
 }
-private fun safe(value: String) = value.replace(Regex("[^A-Za-z0-9._-]+"), "_").take(48)
-private fun purchasesDump(items: List<com.apingu.purchasesales.data.PurchaseEntity>) = buildString {
+private fun safe(value: String) = value.replace(Regex("[^A-Za-z0-9._-]+"), "_").trim('_').take(64)
+private fun purchasesDump(items: List<PurchaseEntity>) = buildString {
     appendLine("PURCHASES RECOVERY DUMP")
     appendLine("Generated: ${LocalDate.now()}")
     appendLine("============================================================")
@@ -192,7 +212,7 @@ private fun purchasesDump(items: List<com.apingu.purchasesales.data.PurchaseEnti
         appendLine("------------------------------------------------------------")
     }
 }
-private fun pendingDump(items: List<com.apingu.purchasesales.data.PurchaseEntity>) = purchasesDump(items.filter { it.status in setOf("RECEIPT_PENDING", "PARTIALLY_RECEIVED", "REFUND_PENDING", "RETURNED") })
+private fun pendingDump(items: List<PurchaseEntity>) = purchasesDump(items.filter { it.status in setOf("RECEIPT_PENDING", "PARTIALLY_RECEIVED", "REFUND_PENDING", "RETURNED") })
 private fun inventoryDump(items: List<InventoryRow>) = buildString {
     appendLine("INVENTORY RECOVERY DUMP")
     appendLine("Generated: ${LocalDate.now()}")
