@@ -19,6 +19,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     private val dao = (app as PurchaseSalesApplication).database.dao()
 
     val business = repo.business.map { it ?: BusinessEntity() }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), BusinessEntity())
+    val accountingPeriods = repo.accountingPeriods.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val customers = repo.customers.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val purchaseOrders = repo.purchaseOrders.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val purchases = repo.purchases.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -28,6 +29,11 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     val saleReturns = repo.saleReturns.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val returnAllocations = repo.returnAllocations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val expenses = repo.expenses.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val selectedAccountingPeriod = combine(business, accountingPeriods) { b, periods ->
+        periods.firstOrNull { it.id == b.selectedAccountingPeriodId }
+            ?: periods.maxByOrNull { it.startEpochDay }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val inventory = combine(purchases, allocations, returnAllocations) { p, a, r -> buildInventory(p, a, r) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -40,10 +46,9 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
 
     private val financePart = combine(purchases, sales, saleLines, allocations, saleReturns) { p, s, l, a, r -> FinancePart(p, s, l, a, r) }
     private val financePart2 = combine(financePart, returnAllocations, expenses) { f, ra, e -> FinancePart2(f, ra, e) }
-    val summary = combine(business, financePart2) { b, d ->
-        val start = b.accountingStartEpochDay.takeIf { it > 0 } ?: epochDayToday()
-        val end = b.accountingEndEpochDay.takeIf { it >= start } ?: start
-        buildFinanceSummary(start, end, d.f.p, d.f.s, d.f.l, d.f.a, d.f.r, d.ra, d.e)
+    val summary = combine(selectedAccountingPeriod, financePart2) { period, d ->
+        if (period == null) FinanceSummary()
+        else buildFinanceSummary(period.startEpochDay, period.endEpochDay, d.f.p, d.f.s, d.f.l, d.f.a, d.f.r, d.ra, d.e)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), FinanceSummary())
 
     private val _message = MutableStateFlow<String?>(null)
@@ -53,14 +58,13 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     init { viewModelScope.launch { repo.ensureBusinessDefaults() } }
 
     fun saveBusiness(value: BusinessEntity, onSuccess: () -> Unit = {}) = action("Business details saved", onSuccess) { repo.saveBusiness(value) }
+    fun saveAccountingPeriod(value: AccountingPeriodEntity, onSuccess: () -> Unit = {}) = action("Accounting period saved", onSuccess) { repo.saveAccountingPeriod(value) }
+    fun selectAccountingPeriod(value: AccountingPeriodEntity) = action("Accounting period changed") { repo.selectAccountingPeriod(value.id) }
+    fun deleteAccountingPeriod(value: AccountingPeriodEntity) = action("Accounting period deleted") { repo.deleteAccountingPeriod(value) }
+
     fun saveCustomer(value: CustomerEntity, onSuccess: () -> Unit = {}) = action("Customer saved", onSuccess) { repo.addCustomer(value) }
     fun deleteCustomer(value: CustomerEntity) = action("Customer deleted") { repo.deleteCustomer(value) }
 
-    /**
-     * Item notes are persisted on the underlying PurchaseEntity line after the existing order save.
-     * PurchaseEntity already has a notes field, so this adds line-level IMEI/serial traceability
-     * without a destructive schema change. PurchaseOrderEntity.notes remains the separate order note.
-     */
     fun savePurchaseOrder(
         value: PurchaseOrderDraft,
         attachmentUri: Uri?,
@@ -90,14 +94,9 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
 
     fun markReceivedAllOrder(orderId: Long) = action("Purchase received") { repo.markReceivedAllOrder(orderId) }
 
-    // Legacy V1 entry points retained for source compatibility with the original screen.
     fun savePurchase(value: PurchaseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) = action("Purchase saved", onSuccess) { repo.savePurchase(value, attachmentUri) }
     fun markReceivedAll(value: PurchaseEntity) = action("Purchase received") { repo.markReceivedAll(value) }
 
-    /**
-     * The repository performs stock allocation first. We then regenerate the PDF from the committed
-     * allocations so notes/IMEIs from the exact purchase lots used by each sale line can be printed.
-     */
     fun saveSale(value: SaleDraft, onSuccess: () -> Unit) = action("Invoice generated", onSuccess) {
         val saleId = repo.saveSale(value)
         refreshTraceableInvoice(saleId)
@@ -133,19 +132,18 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     fun syncNow() = action("Dropbox sync queued") { repo.enqueueSync() }
 
     fun exportExcel(uri: Uri) = action("Excel workbook exported") {
+        val period = selectedAccountingPeriod.value ?: error("Set an accounting period first")
         val data = repo.getFullData()
-        val start = data.business.accountingStartEpochDay.takeIf { it > 0 } ?: epochDayToday()
-        val end = data.business.accountingEndEpochDay.takeIf { it >= start } ?: start
-        val summary = buildFinanceSummary(start, end, data.purchases, data.sales, data.saleLines, data.allocations, data.saleReturns, data.returnAllocations, data.expenses)
-        val temp = File(context.cacheDir, "Business_Records.xlsx")
+        val summary = buildFinanceSummary(period.startEpochDay, period.endEpochDay, data.purchases, data.sales, data.saleLines, data.allocations, data.saleReturns, data.returnAllocations, data.expenses)
+        val temp = File(context.cacheDir, "Business_Records_${safePeriodFileName(period.name)}.xlsx")
         XlsxExport.create(
             temp,
-            data.purchases.filter { it.purchaseDateEpochDay in start..end && !isCancelledAndFullyRefundedPurchase(it) },
-            data.sales.filter { it.saleDateEpochDay in start..end },
+            data.purchases.filter { it.purchaseDateEpochDay in period.startEpochDay..period.endEpochDay && !isCancelledAndFullyRefundedPurchase(it) },
+            data.sales.filter { it.saleDateEpochDay in period.startEpochDay..period.endEpochDay },
             data.saleLines,
-            data.saleReturns.filter { it.returnDateEpochDay in start..end },
+            data.saleReturns.filter { it.returnDateEpochDay in period.startEpochDay..period.endEpochDay },
             data.customers,
-            data.expenses.filter { it.expenseDateEpochDay in start..end },
+            data.expenses.filter { it.expenseDateEpochDay in period.startEpochDay..period.endEpochDay },
             summary
         )
         context.contentResolver.openOutputStream(uri).use { out -> requireNotNull(out); temp.inputStream().use { it.copyTo(out) } }
@@ -164,6 +162,8 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
                 .onFailure { _message.value = it.message ?: "Something went wrong" }
         }
     }
+
+    private fun safePeriodFileName(value: String): String = value.replace(Regex("[^A-Za-z0-9._-]+"), "_").trim('_').ifBlank { "Accounting_Period" }
 
     companion object {
         fun factory(app: PurchaseSalesApplication): ViewModelProvider.Factory = object : ViewModelProvider.Factory {
