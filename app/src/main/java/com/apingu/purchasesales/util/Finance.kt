@@ -49,7 +49,6 @@ fun compactDate(day: Long): String = dateFromEpoch(day).format(DateTimeFormatter
 fun parseDateOrToday(text: String): Long = runCatching { LocalDate.parse(text, DateTimeFormatter.ofPattern("dd/MM/yyyy")).toEpochDay() }.getOrElse { epochDayToday() }
 fun editDate(day: Long): String = dateFromEpoch(day).format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
 
-/** A partial price-adjustment refund reduces cost without removing physical stock. */
 fun effectivePurchaseNetPence(purchase: PurchaseEntity): Long =
     (purchase.netPence - if (purchase.partialRefund) purchase.refundNetPence else 0).coerceAtLeast(0)
 
@@ -115,7 +114,11 @@ fun buildFinanceSummary(
 ): FinanceSummary {
     val s = sales.filter { it.saleDateEpochDay in start..end }
     val e = expenses.filter { it.expenseDateEpochDay in start..end }
-    val p = purchases.filter { it.purchaseDateEpochDay in start..end }
+    // A purchase that was completely cancelled and refunded is a voided transaction for the
+    // accounting period. Exclude it entirely instead of adding VAT then trying to reverse it.
+    val p = purchases.filter {
+        it.purchaseDateEpochDay in start..end && !isCancelledAndFullyRefundedPurchase(it)
+    }
     val saleIds = s.map { it.id }.toSet()
     val saleLineIdsInPeriod = saleLines.filter { it.saleId in saleIds }.map { it.id }.toSet()
 
@@ -126,8 +129,6 @@ fun buildFinanceSummary(
     val expensesNet = e.sumOf { it.netPence }
     val outputVat = s.sumOf { it.vatPence } - salesReturnVat
 
-    // Supplier credits use the explicitly recorded VAT component. This is intentionally NOT
-    // inferred from the refund total because suppliers can issue a net-only partial credit.
     val supplierRefundVat = p.sumOf { it.refundVatPence.coerceAtMost(it.vatPence) }
     val supplierReverseCredit = p.sumOf { purchase ->
         if (purchase.vatType != VatTypes.REVERSE) 0L
@@ -142,7 +143,7 @@ fun buildFinanceSummary(
     val reverseInput = p.sumOf { it.reverseVatPence } - supplierReverseCredit + e.sumOf { it.reverseVatPence }
     val reverseOutput = reverseInput
     val inventory = buildInventory(purchases, allocations, returnAllocations).sumOf { it.inventoryNetCostPence }
-    val refundsPending = purchases.sumOf { (it.refundExpectedPence - it.refundReceivedPence).coerceAtLeast(0) }
+    val refundsPending = p.sumOf { (it.refundExpectedPence - it.refundReceivedPence).coerceAtLeast(0) }
 
     val allocationById = allocations.associateBy { it.id }
     val cogsOnPeriodSales = allocations.filter { it.saleLineId in saleLineIdsInPeriod }.sumOf { it.quantity * it.unitNetCostPence }
