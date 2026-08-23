@@ -60,12 +60,7 @@ fun PurchaseSalesRootV3() {
     }
 }
 
-private data class BottomItemV3(
-    val route: String,
-    val label: String,
-    val icon: androidx.compose.ui.graphics.vector.ImageVector
-)
-
+private data class BottomItemV3(val route: String, val label: String, val icon: androidx.compose.ui.graphics.vector.ImageVector)
 private val bottomItemsV3 = listOf(
     BottomItemV3("dashboard", "Home", Icons.Default.Home),
     BottomItemV3("purchases", "Purchases", Icons.Default.ShoppingCart),
@@ -106,6 +101,7 @@ private fun AppNavigationV3(nav: NavHostController, vm: AppViewModel) {
             composable("dashboard") { DashboardScreenV3(vm, nav) }
             composable("purchases") { PurchasesScreenV3(vm, nav) }
             composable("purchase/new") { PurchaseOrderEditorV3(vm, nav, 0L) }
+            composable("purchase/duplicate/{id}") { PurchaseOrderEditorV3(vm, nav, 0L, it.arguments?.getString("id")?.toLongOrNull() ?: 0L) }
             composable("purchase/{id}") { PurchaseOrderEditorV3(vm, nav, it.arguments?.getString("id")?.toLongOrNull() ?: 0L) }
             composable("inventory") { InventoryScreenV3(vm) }
             composable("sales") { SalesScreen(vm, nav) }
@@ -129,7 +125,9 @@ private fun DashboardScreenV3(vm: AppViewModel, nav: NavHostController) {
     val orders by vm.purchaseOrders.collectAsStateWithLifecycle()
     val purchaseLines by vm.purchases.collectAsStateWithLifecycle()
     val business by vm.business.collectAsStateWithLifecycle()
-    val pendingOrders = orders.count { order ->
+    val period by vm.selectedAccountingPeriod.collectAsStateWithLifecycle()
+    val periodOrders = if (period == null) emptyList() else orders.filter { it.purchaseDateEpochDay in period!!.startEpochDay..period!!.endEpochDay }
+    val pendingOrders = periodOrders.count { order ->
         purchaseOrderStatusV3(purchaseLines.filter { it.purchaseOrderId == order.id }) in PendingReceiptStatusesV3
     }
 
@@ -141,12 +139,8 @@ private fun DashboardScreenV3(vm: AppViewModel, nav: NavHostController) {
         ) {
             item {
                 Text(business.businessName.ifBlank { "Business dashboard" }, style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                Text(
-                    if (business.accountingStartEpochDay > 0)
-                        "Accounting period ${displayDate(business.accountingStartEpochDay)} – ${displayDate(business.accountingEndEpochDay)}"
-                    else "Set your accounting period in Business Details",
-                    style = MaterialTheme.typography.bodySmall
-                )
+                Spacer(Modifier.height(6.dp))
+                AccountingPeriodSelector(vm)
             }
             item { ResponsiveMetricPair("Net sales", formatMoney(summary.salesNet), "Net profit", formatMoney(summary.netProfit)) }
             item { ResponsiveMetricPair("Inventory", formatMoney(summary.inventoryValue), "Refunds pending", formatMoney(summary.refundsPending)) }
@@ -184,7 +178,7 @@ private fun DashboardScreenV3(vm: AppViewModel, nav: NavHostController) {
                         Spacer(Modifier.width(12.dp))
                         Column(Modifier.weight(1f)) {
                             Text("Pending receipts", fontWeight = FontWeight.SemiBold)
-                            Text("$pendingOrders purchase order${if (pendingOrders == 1) "" else "s"} need attention")
+                            Text("$pendingOrders purchase order${if (pendingOrders == 1) "" else "s"} in this accounting period need attention")
                         }
                         Icon(Icons.Default.ChevronRight, null)
                     }
@@ -216,10 +210,12 @@ private fun ResponsiveMetricPair(label1: String, value1: String, label2: String,
 private fun PurchasesScreenV3(vm: AppViewModel, nav: NavHostController) {
     val orders by vm.purchaseOrders.collectAsStateWithLifecycle()
     val allLines by vm.purchases.collectAsStateWithLifecycle()
+    val period by vm.selectedAccountingPeriod.collectAsStateWithLifecycle()
     var tab by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
 
-    val rows = orders.map { order -> order to allLines.filter { it.purchaseOrderId == order.id } }
+    val periodOrders = if (period == null) emptyList() else orders.filter { it.purchaseDateEpochDay in period!!.startEpochDay..period!!.endEpochDay }
+    val rows = periodOrders.map { order -> order to allLines.filter { it.purchaseOrderId == order.id } }
     val pendingCount = rows.count { (_, lines) -> purchaseOrderStatusV3(lines) in PendingReceiptStatusesV3 }
     val otherCount = rows.size - pendingCount
     val filtered = rows.filter { (order, lines) ->
@@ -240,6 +236,7 @@ private fun PurchasesScreenV3(vm: AppViewModel, nav: NavHostController) {
         floatingActionButton = { FloatingActionButton({ nav.navigate("purchase/new") }) { Icon(Icons.Default.Add, "New purchase") } }
     ) { inner ->
         Column(Modifier.padding(inner)) {
+            AccountingPeriodSelector(vm, Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
             ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) {
                 Tab(tab == 0, { tab = 0 }, text = { Text("Pending receipts") })
                 Tab(tab == 1, { tab = 1 }, text = { Text("All others") })
@@ -264,7 +261,7 @@ private fun PurchasesScreenV3(vm: AppViewModel, nav: NavHostController) {
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
             if (filtered.isEmpty()) {
-                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState("No purchase orders match this view") }
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState("No purchase orders in this accounting period match this view") }
             } else {
                 LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(filtered, key = { it.first.id }) { (order, lines) -> PurchaseOrderCardV3(order, lines, nav, vm) }
@@ -303,7 +300,10 @@ private fun PurchaseOrderCardV3(order: PurchaseOrderEntity, lines: List<Purchase
             Text("Received $received • Returned $returned", style = MaterialTheme.typography.bodySmall)
             if (partialCredits > 0) Text("Partial refund credits ${formatMoney(partialCredits)}", style = MaterialTheme.typography.bodySmall)
             if (status in PendingReceiptStatusesV3) {
-                TextButton({ vm.markReceivedAllOrder(order.id) }) { Icon(Icons.Default.CheckCircle, null); Spacer(Modifier.width(5.dp)); Text("Receive all remaining items") }
+                Row {
+                    TextButton({ vm.markReceivedAllOrder(order.id) }) { Icon(Icons.Default.CheckCircle, null); Spacer(Modifier.width(5.dp)); Text("Receive all") }
+                    TextButton({ nav.navigate("purchase/duplicate/${order.id}") }) { Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(5.dp)); Text("Duplicate") }
+                }
             }
         }
     }
@@ -326,40 +326,46 @@ private data class PurchaseLineFormV3(
 )
 
 @Composable
-private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: Long) {
+private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: Long, duplicateFromId: Long = 0L) {
     val orders by vm.purchaseOrders.collectAsStateWithLifecycle()
     val allLines by vm.purchases.collectAsStateWithLifecycle()
     val order = orders.firstOrNull { it.id == id }
-    val existingLines = allLines.filter { it.purchaseOrderId == id }.sortedBy { it.id }
-    if (id > 0 && (order == null || existingLines.isEmpty())) { LoadingScreen(); return }
+    val duplicateOrder = orders.firstOrNull { it.id == duplicateFromId }
+    val sourceOrder = order ?: duplicateOrder
+    val sourceLines = allLines.filter { it.purchaseOrderId == (if (id > 0) id else duplicateFromId) }.sortedBy { it.id }
+    val isDuplicate = duplicateFromId > 0L
 
-    var date by remember(order?.id) { mutableStateOf(editDate(order?.purchaseDateEpochDay ?: epochDayToday())) }
-    var supplier by remember(order?.id) { mutableStateOf(order?.supplier.orEmpty()) }
-    var orderNo by remember(order?.id) { mutableStateOf(order?.orderNumber.orEmpty()) }
-    var account by remember(order?.id) { mutableStateOf(order?.accountUsername.orEmpty()) }
-    var vatType by remember(order?.id) { mutableStateOf(order?.vatType ?: VatTypes.STANDARD) }
-    var payment by remember(order?.id) { mutableStateOf(order?.paymentMethod.orEmpty()) }
-    var orderNotes by remember(order?.id) { mutableStateOf(order?.notes.orEmpty()) }
+    if (id > 0 && (order == null || sourceLines.isEmpty())) { LoadingScreen(); return }
+    if (isDuplicate && (duplicateOrder == null || sourceLines.isEmpty())) { LoadingScreen(); return }
+
+    var date by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(editDate(sourceOrder?.purchaseDateEpochDay ?: epochDayToday())) }
+    var supplier by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.supplier.orEmpty()) }
+    var orderNo by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(if (isDuplicate) "" else sourceOrder?.orderNumber.orEmpty()) }
+    var account by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.accountUsername.orEmpty()) }
+    var vatType by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.vatType ?: VatTypes.STANDARD) }
+    var payment by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.paymentMethod.orEmpty()) }
+    var orderNotes by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.notes.orEmpty()) }
     var attachment by remember { mutableStateOf<Uri?>(null) }
 
-    val forms = remember(order?.id, existingLines.size) {
+    val forms = remember(sourceOrder?.id, sourceLines.size, isDuplicate) {
         mutableStateListOf<PurchaseLineFormV3>().apply {
-            if (existingLines.isNotEmpty()) existingLines.forEach { line ->
-                val legacyDuplicatedOrderNote = order?.notes?.trim().orEmpty()
+            if (sourceLines.isNotEmpty()) sourceLines.forEach { line ->
+                val legacyDuplicatedOrderNote = sourceOrder?.notes?.trim().orEmpty()
                 add(PurchaseLineFormV3(
-                    id = line.id,
+                    id = if (isDuplicate) 0L else line.id,
                     item = line.item,
                     quantity = line.quantity.toString(),
                     gross = formatMoneyPlain(line.grossPence),
-                    notes = line.notes.trim().takeUnless { it.isNotBlank() && it == legacyDuplicatedOrderNote }.orEmpty(),
-                    received = line.receivedQty.takeIf { it > 0 }?.toString().orEmpty(),
-                    cancelled = line.cancelledQty.takeIf { it > 0 }?.toString().orEmpty(),
-                    returned = line.returnedQty.takeIf { it > 0 }?.toString().orEmpty(),
-                    refundExpected = line.refundExpectedPence.takeIf { it > 0 && !line.partialRefund }?.let(::formatMoneyPlain).orEmpty(),
-                    refundReceived = line.refundReceivedPence.takeIf { it > 0 && !line.partialRefund }?.let(::formatMoneyPlain).orEmpty(),
-                    partialRefund = line.partialRefund,
-                    refundNet = line.refundNetPence.takeIf { it > 0 && line.partialRefund }?.let(::formatMoneyPlain).orEmpty(),
-                    refundVat = line.refundVatPence.takeIf { it > 0 && line.partialRefund }?.let(::formatMoneyPlain).orEmpty()
+                    // IMEI/serial notes are unit-specific, so deliberately clear them on a duplicate.
+                    notes = if (isDuplicate) "" else line.notes.trim().takeUnless { it.isNotBlank() && it == legacyDuplicatedOrderNote }.orEmpty(),
+                    received = if (isDuplicate) "" else line.receivedQty.takeIf { it > 0 }?.toString().orEmpty(),
+                    cancelled = if (isDuplicate) "" else line.cancelledQty.takeIf { it > 0 }?.toString().orEmpty(),
+                    returned = if (isDuplicate) "" else line.returnedQty.takeIf { it > 0 }?.toString().orEmpty(),
+                    refundExpected = if (isDuplicate) "" else line.refundExpectedPence.takeIf { it > 0 && !line.partialRefund }?.let(::formatMoneyPlain).orEmpty(),
+                    refundReceived = if (isDuplicate) "" else line.refundReceivedPence.takeIf { it > 0 && !line.partialRefund }?.let(::formatMoneyPlain).orEmpty(),
+                    partialRefund = if (isDuplicate) false else line.partialRefund,
+                    refundNet = if (isDuplicate) "" else line.refundNetPence.takeIf { it > 0 && line.partialRefund }?.let(::formatMoneyPlain).orEmpty(),
+                    refundVat = if (isDuplicate) "" else line.refundVatPence.takeIf { it > 0 && line.partialRefund }?.let(::formatMoneyPlain).orEmpty()
                 ))
             } else add(PurchaseLineFormV3())
         }
@@ -369,9 +375,15 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
     val totalGross = forms.sumOf { runCatching { moneyToPence(it.gross) }.getOrDefault(0) }
     val totalBreakdown = breakdownFromGross(totalGross, vatType)
     val totalQty = forms.sumOf { it.quantity.toIntOrNull() ?: 0 }
+    val title = when { isDuplicate -> "Duplicate purchase"; id == 0L -> "New purchase"; else -> "Edit purchase" }
 
-    ScreenScaffold(if (id == 0L) "New purchase" else "Edit purchase", onBack = { nav.popBackStack() }) { inner ->
+    ScreenScaffold(title, onBack = { nav.popBackStack() }) { inner ->
         Column(Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (isDuplicate) {
+                ElevatedCard(Modifier.fillMaxWidth()) {
+                    Text("Copied from ${duplicateOrder?.orderNumber.orEmpty().ifBlank { "the original order" }}. Enter the new order number. Receipt/refund fields, invoice attachment and IMEI/serial notes have been cleared.", Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                }
+            }
             Text("Purchase details", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             FormField("Purchase date (DD/MM/YYYY)", date, { date = it })
             FormField("Supplier / Store", supplier, { supplier = it })
@@ -402,14 +414,14 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
             FormField("Order notes (optional - not carried to sales invoice)", orderNotes, { orderNotes = it }, singleLine = false)
             OutlinedButton({ picker.launch("*/*") }, Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.AttachFile, null); Spacer(Modifier.width(6.dp))
-                Text(if (attachment != null) "New invoice selected" else if (!order?.invoicePath.isNullOrBlank()) "Replace purchase invoice" else "Attach purchase invoice (optional)")
+                Text(if (attachment != null) "New invoice selected" else if (!isDuplicate && !order?.invoicePath.isNullOrBlank()) "Replace purchase invoice" else "Attach purchase invoice (optional)")
             }
 
             Button(
                 onClick = {
                     vm.savePurchaseOrder(
                         value = PurchaseOrderDraft(
-                            id = id,
+                            id = if (isDuplicate) 0L else id,
                             dateEpochDay = parseDateOrToday(date),
                             supplier = supplier,
                             orderNumber = orderNo,
@@ -418,7 +430,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
                             paymentMethod = payment,
                             notes = orderNotes,
                             items = forms.map { form -> PurchaseItemDraft(
-                                id = form.id,
+                                id = if (isDuplicate) 0L else form.id,
                                 item = form.item,
                                 quantity = form.quantity.toIntOrNull() ?: 0,
                                 grossPence = runCatching { moneyToPence(form.gross) }.getOrDefault(0),
@@ -431,7 +443,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
                                 refundNetPence = if (form.partialRefund) runCatching { moneyToPence(form.refundNet) }.getOrDefault(0) else 0,
                                 refundVatPence = if (form.partialRefund) runCatching { moneyToPence(form.refundVat) }.getOrDefault(0) else 0
                             ) },
-                            existingInvoicePath = order?.invoicePath
+                            existingInvoicePath = if (isDuplicate) null else order?.invoicePath
                         ),
                         attachmentUri = attachment,
                         itemNotes = forms.map { it.notes }
