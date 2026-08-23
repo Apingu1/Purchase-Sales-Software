@@ -93,6 +93,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     private val dao = db.dao()
 
     val business: Flow<BusinessEntity?> = dao.observeBusiness()
+    val accountingPeriods = dao.observeAccountingPeriods()
     val customers = dao.observeCustomers()
     val purchaseOrders = dao.observePurchaseOrders()
     val purchases = dao.observePurchases()
@@ -104,18 +105,88 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     val expenses = dao.observeExpenses()
 
     suspend fun ensureBusinessDefaults() {
-        if (dao.getBusiness() == null) {
+        var business = dao.getBusiness()
+        if (business == null) {
             val today = LocalDate.now()
+            business = BusinessEntity(
+                accountingStartEpochDay = today.withMonth(1).withDayOfMonth(1).toEpochDay(),
+                accountingEndEpochDay = today.withMonth(12).withDayOfMonth(31).toEpochDay()
+            )
+            dao.saveBusiness(business)
+        }
+
+        var periods = dao.getAccountingPeriods()
+        if (periods.isEmpty()) {
+            val start = business.accountingStartEpochDay.takeIf { it > 0 }
+                ?: LocalDate.now().withMonth(1).withDayOfMonth(1).toEpochDay()
+            val end = business.accountingEndEpochDay.takeIf { it >= start }
+                ?: LocalDate.now().withMonth(12).withDayOfMonth(31).toEpochDay()
+            val id = dao.insertAccountingPeriod(
+                AccountingPeriodEntity(name = defaultPeriodName(start, end), startEpochDay = start, endEpochDay = end)
+            )
+            business = business.copy(
+                accountingStartEpochDay = start,
+                accountingEndEpochDay = end,
+                selectedAccountingPeriodId = id
+            )
+            dao.saveBusiness(business)
+            periods = dao.getAccountingPeriods()
+        }
+
+        if (business.selectedAccountingPeriodId <= 0 || periods.none { it.id == business.selectedAccountingPeriodId }) {
+            val period = periods.maxByOrNull { it.startEpochDay } ?: return
             dao.saveBusiness(
-                BusinessEntity(
-                    accountingStartEpochDay = today.withMonth(1).withDayOfMonth(1).toEpochDay(),
-                    accountingEndEpochDay = today.withMonth(12).withDayOfMonth(31).toEpochDay()
+                business.copy(
+                    selectedAccountingPeriodId = period.id,
+                    accountingStartEpochDay = period.startEpochDay,
+                    accountingEndEpochDay = period.endEpochDay
                 )
             )
         }
     }
 
     suspend fun saveBusiness(value: BusinessEntity) { dao.saveBusiness(value); enqueueSync() }
+
+    suspend fun saveAccountingPeriod(value: AccountingPeriodEntity): Long {
+        require(value.name.trim().isNotBlank()) { "Accounting period name is required" }
+        require(value.startEpochDay <= value.endEpochDay) { "Accounting period end date must be on or after the start date" }
+        val existing = dao.getAccountingPeriods().filter { it.id != value.id }
+        require(existing.none { value.startEpochDay <= it.endEpochDay && value.endEpochDay >= it.startEpochDay }) {
+            "Accounting periods cannot overlap"
+        }
+        val normalized = value.copy(name = value.name.trim())
+        val id = if (value.id == 0L) dao.insertAccountingPeriod(normalized) else {
+            dao.updateAccountingPeriod(normalized)
+            value.id
+        }
+        val business = dao.getBusiness() ?: BusinessEntity()
+        if (business.selectedAccountingPeriodId <= 0) selectAccountingPeriod(id) else enqueueSync()
+        return id
+    }
+
+    suspend fun selectAccountingPeriod(id: Long) {
+        val period = dao.getAccountingPeriod(id) ?: error("Accounting period not found")
+        val business = dao.getBusiness() ?: BusinessEntity()
+        dao.saveBusiness(
+            business.copy(
+                selectedAccountingPeriodId = period.id,
+                accountingStartEpochDay = period.startEpochDay,
+                accountingEndEpochDay = period.endEpochDay
+            )
+        )
+    }
+
+    suspend fun deleteAccountingPeriod(value: AccountingPeriodEntity) {
+        val periods = dao.getAccountingPeriods()
+        require(periods.size > 1) { "Keep at least one accounting period" }
+        dao.deleteAccountingPeriod(value)
+        val business = dao.getBusiness() ?: BusinessEntity()
+        if (business.selectedAccountingPeriodId == value.id) {
+            val replacement = dao.getAccountingPeriods().maxByOrNull { it.startEpochDay } ?: return
+            selectAccountingPeriod(replacement.id)
+        }
+        enqueueSync()
+    }
 
     suspend fun addCustomer(value: CustomerEntity): Long {
         require(value.companyName.isNotBlank()) { "Customer name is required" }
@@ -126,12 +197,6 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
 
     suspend fun deleteCustomer(value: CustomerEntity) = dao.deleteCustomer(value)
 
-    /**
-     * Saves one purchase/order header and all of its item lines atomically.
-     * Each PurchaseEntity remains an independent inventory lot so different items in the same
-     * supplier order can be received/cancelled/returned independently and keep their own cost.
-     * A partial monetary refund is independent of quantity returns and can have an explicit net/VAT split.
-     */
     suspend fun savePurchaseOrder(draft: PurchaseOrderDraft, attachmentUri: Uri? = null): Long {
         require(draft.supplier.isNotBlank()) { "Supplier/store is required" }
         require(draft.items.isNotEmpty()) { "Add at least one item" }
@@ -188,9 +253,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                         "${old.item} has sales history, so its item name cannot be changed"
                     }
                     val allocationIds = lineAllocations.map { it.id }.toSet()
-                    val restored = allReturnAllocations
-                        .filter { it.saleAllocationId in allocationIds }
-                        .sumOf { it.quantity }
+                    val restored = allReturnAllocations.filter { it.saleAllocationId in allocationIds }.sumOf { it.quantity }
                     val netSold = lineAllocations.sumOf { it.quantity } - restored
                     require(itemDraft.receivedQty - itemDraft.returnedQty >= netSold) {
                         "${old.item} has $netSold unit(s) allocated to sales; received/returned quantities cannot reduce available stock below that"
@@ -201,14 +264,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 val explicitRefundTotal = if (itemDraft.partialRefund) itemDraft.refundNetPence + itemDraft.refundVatPence else 0
                 val refundExpected = if (itemDraft.partialRefund) explicitRefundTotal else itemDraft.refundExpectedPence
                 val refundReceived = if (itemDraft.partialRefund) explicitRefundTotal else itemDraft.refundReceivedPence
-                val lineStatus = derivePurchaseStatus(
-                    itemDraft.quantity,
-                    itemDraft.receivedQty,
-                    itemDraft.cancelledQty,
-                    itemDraft.returnedQty,
-                    refundExpected,
-                    refundReceived
-                )
+                val lineStatus = derivePurchaseStatus(itemDraft.quantity, itemDraft.receivedQty, itemDraft.cancelledQty, itemDraft.returnedQty, refundExpected, refundReceived)
                 val line = PurchaseEntity(
                     id = itemDraft.id,
                     purchaseOrderId = savedOrderId,
@@ -237,10 +293,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                     notes = draft.notes.trim(),
                     updatedAtMillis = now
                 )
-                val lineId = if (old == null) dao.insertPurchase(line) else {
-                    dao.updatePurchase(line)
-                    line.id
-                }
+                val lineId = if (old == null) dao.insertPurchase(line) else { dao.updatePurchase(line); line.id }
                 val effectiveNet = (vat.netPence - if (itemDraft.partialRefund) itemDraft.refundNetPence else 0).coerceAtLeast(0)
                 val unitNet = if (itemDraft.quantity > 0) effectiveNet / itemDraft.quantity else 0
                 dao.updateAllocationUnitCostForPurchase(lineId, unitNet)
@@ -251,11 +304,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         return orderId
     }
 
-    private fun legacyRefundNet(refundGrossPence: Long, vatType: String): Long =
-        if (refundGrossPence > 0) breakdownFromGross(refundGrossPence, vatType).netPence else 0
-
-    private fun legacyRefundVat(refundGrossPence: Long, vatType: String): Long =
-        if (refundGrossPence > 0) breakdownFromGross(refundGrossPence, vatType).vatPence else 0
+    private fun legacyRefundNet(refundGrossPence: Long, vatType: String): Long = if (refundGrossPence > 0) breakdownFromGross(refundGrossPence, vatType).netPence else 0
+    private fun legacyRefundVat(refundGrossPence: Long, vatType: String): Long = if (refundGrossPence > 0) breakdownFromGross(refundGrossPence, vatType).vatPence else 0
 
     private fun validatePurchaseItem(item: PurchaseItemDraft) {
         require(item.item.isNotBlank()) { "Each purchase line needs an item" }
@@ -276,14 +326,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         }
     }
 
-    private fun derivePurchaseStatus(
-        quantity: Int,
-        receivedQty: Int,
-        cancelledQty: Int,
-        returnedQty: Int,
-        refundExpectedPence: Long,
-        refundReceivedPence: Long
-    ): String = when {
+    private fun derivePurchaseStatus(quantity: Int, receivedQty: Int, cancelledQty: Int, returnedQty: Int, refundExpectedPence: Long, refundReceivedPence: Long): String = when {
         refundExpectedPence > 0 && refundReceivedPence >= refundExpectedPence -> "REFUND_RECEIVED"
         refundExpectedPence > refundReceivedPence -> "REFUND_PENDING"
         returnedQty > 0 && returnedQty >= receivedQty && receivedQty > 0 -> "RETURNED"
@@ -293,56 +336,32 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         else -> "RECEIVED"
     }
 
-    /** Legacy one-item entry adapter. */
     suspend fun savePurchase(draft: PurchaseDraft, attachmentUri: Uri? = null): Long {
         val existing = if (draft.id > 0) dao.getPurchase(draft.id) else null
         val orderId = existing?.purchaseOrderId?.takeIf { it > 0 } ?: 0L
         val header = if (orderId > 0) dao.getPurchaseOrder(orderId) else null
         val currentLines = if (orderId > 0) dao.getPurchasesForOrder(orderId) else emptyList()
         val replacement = PurchaseItemDraft(
-            id = existing?.id ?: 0,
-            item = draft.item,
-            quantity = draft.quantity,
-            grossPence = draft.grossPence,
-            receivedQty = draft.receivedQty,
-            cancelledQty = draft.cancelledQty,
-            returnedQty = draft.returnedQty,
-            refundExpectedPence = draft.refundExpectedPence,
-            refundReceivedPence = draft.refundReceivedPence,
-            partialRefund = draft.partialRefund,
-            refundNetPence = draft.refundNetPence,
-            refundVatPence = draft.refundVatPence
+            id = existing?.id ?: 0, item = draft.item, quantity = draft.quantity, grossPence = draft.grossPence,
+            receivedQty = draft.receivedQty, cancelledQty = draft.cancelledQty, returnedQty = draft.returnedQty,
+            refundExpectedPence = draft.refundExpectedPence, refundReceivedPence = draft.refundReceivedPence,
+            partialRefund = draft.partialRefund, refundNetPence = draft.refundNetPence, refundVatPence = draft.refundVatPence
         )
         val itemDrafts = if (existing == null) listOf(replacement) else currentLines.map { line ->
             if (line.id == existing.id) replacement else PurchaseItemDraft(
-                id = line.id,
-                item = line.item,
-                quantity = line.quantity,
-                grossPence = line.grossPence,
-                receivedQty = line.receivedQty,
-                cancelledQty = line.cancelledQty,
-                returnedQty = line.returnedQty,
-                refundExpectedPence = line.refundExpectedPence,
-                refundReceivedPence = line.refundReceivedPence,
-                partialRefund = line.partialRefund,
-                refundNetPence = line.refundNetPence,
-                refundVatPence = line.refundVatPence
+                id = line.id, item = line.item, quantity = line.quantity, grossPence = line.grossPence,
+                receivedQty = line.receivedQty, cancelledQty = line.cancelledQty, returnedQty = line.returnedQty,
+                refundExpectedPence = line.refundExpectedPence, refundReceivedPence = line.refundReceivedPence,
+                partialRefund = line.partialRefund, refundNetPence = line.refundNetPence, refundVatPence = line.refundVatPence
             )
         }
         val savedOrderId = savePurchaseOrder(
             PurchaseOrderDraft(
-                id = header?.id ?: 0,
-                dateEpochDay = draft.dateEpochDay,
-                supplier = draft.supplier,
-                orderNumber = draft.orderNumber,
-                accountUsername = draft.accountUsername,
-                vatType = draft.vatType,
-                paymentMethod = draft.paymentMethod,
-                notes = draft.notes,
-                items = itemDrafts,
+                id = header?.id ?: 0, dateEpochDay = draft.dateEpochDay, supplier = draft.supplier,
+                orderNumber = draft.orderNumber, accountUsername = draft.accountUsername, vatType = draft.vatType,
+                paymentMethod = draft.paymentMethod, notes = draft.notes, items = itemDrafts,
                 existingInvoicePath = header?.invoicePath ?: draft.existingInvoicePath
-            ),
-            attachmentUri
+            ), attachmentUri
         )
         return if (existing != null) existing.id else dao.getPurchasesForOrder(savedOrderId).first().id
     }
@@ -354,25 +373,18 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             lines.forEach { line ->
                 val received = (line.quantity - line.cancelledQty).coerceAtLeast(0)
                 val returned = line.returnedQty.coerceAtMost(received)
-                dao.updatePurchase(
-                    line.copy(
-                        receivedQty = received,
-                        returnedQty = returned,
-                        status = derivePurchaseStatus(
-                            line.quantity, received, line.cancelledQty, returned,
-                            line.refundExpectedPence, line.refundReceivedPence
-                        ),
-                        updatedAtMillis = System.currentTimeMillis()
-                    )
-                )
+                dao.updatePurchase(line.copy(
+                    receivedQty = received,
+                    returnedQty = returned,
+                    status = derivePurchaseStatus(line.quantity, received, line.cancelledQty, returned, line.refundExpectedPence, line.refundReceivedPence),
+                    updatedAtMillis = System.currentTimeMillis()
+                ))
             }
         }
         enqueueSync()
     }
 
-    suspend fun markReceivedAll(purchase: PurchaseEntity) {
-        markReceivedAllOrder(purchase.purchaseOrderId.takeIf { it > 0 } ?: purchase.id)
-    }
+    suspend fun markReceivedAll(purchase: PurchaseEntity) { markReceivedAllOrder(purchase.purchaseOrderId.takeIf { it > 0 } ?: purchase.id) }
 
     suspend fun saveExpense(draft: ExpenseDraft, attachmentUri: Uri? = null): Long {
         require(draft.supplier.isNotBlank()) { "Store/supplier is required" }
@@ -380,20 +392,11 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val vat = breakdownFromGross(draft.grossPence, draft.vatType)
         val path = attachmentUri?.let { DocumentStore.copyIntoApp(context, it, "EXP_${draft.id.takeIf { n -> n > 0 } ?: "NEW"}") } ?: draft.existingAttachmentPath
         val value = ExpenseEntity(
-            id = draft.id,
-            expenseDateEpochDay = draft.dateEpochDay,
-            supplier = draft.supplier.trim(),
-            details = draft.details.trim(),
-            account = draft.account.trim(),
-            grossPence = vat.grossPence,
-            netPence = vat.netPence,
-            vatPence = vat.vatPence,
-            reverseVatPence = vat.reverseVatPence,
-            vatType = draft.vatType,
-            paymentMethod = draft.paymentMethod.trim(),
-            attachmentPath = path,
-            comments = draft.comments.trim(),
-            updatedAtMillis = System.currentTimeMillis()
+            id = draft.id, expenseDateEpochDay = draft.dateEpochDay, supplier = draft.supplier.trim(),
+            details = draft.details.trim(), account = draft.account.trim(), grossPence = vat.grossPence,
+            netPence = vat.netPence, vatPence = vat.vatPence, reverseVatPence = vat.reverseVatPence,
+            vatType = draft.vatType, paymentMethod = draft.paymentMethod.trim(), attachmentPath = path,
+            comments = draft.comments.trim(), updatedAtMillis = System.currentTimeMillis()
         )
         val id = if (draft.id == 0L) dao.insertExpense(value) else { dao.updateExpense(value); draft.id }
         enqueueSync()
@@ -408,35 +411,19 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
 
         val customer = dao.getCustomer(draft.customerId) ?: error("Customer not found")
         val existing = if (draft.id > 0) dao.getSale(draft.id) else null
-        if (existing != null) {
-            dao.deleteAllocationsForSale(existing.id)
-            dao.deleteSaleLinesForSale(existing.id)
-        }
+        if (existing != null) { dao.deleteAllocationsForSale(existing.id); dao.deleteSaleLinesForSale(existing.id) }
 
-        val lineBreakdowns = draft.lines.map { line ->
-            val gross = line.unitGrossPence * line.quantity
-            line to breakdownFromGross(gross, draft.vatType)
-        }
+        val lineBreakdowns = draft.lines.map { line -> line to breakdownFromGross(line.unitGrossPence * line.quantity, draft.vatType) }
         val totalNet = lineBreakdowns.sumOf { it.second.netPence }
         val totalVat = lineBreakdowns.sumOf { it.second.vatPence }
         val totalGross = lineBreakdowns.sumOf { it.second.grossPence }
         val totalReverse = lineBreakdowns.sumOf { it.second.reverseVatPence }
-        val invoiceNo = if (existing != null && existing.customerId == draft.customerId && existing.saleDateEpochDay == draft.dateEpochDay) {
-            existing.invoiceNo
-        } else generateInvoiceNumber(customer, draft.dateEpochDay)
+        val invoiceNo = if (existing != null && existing.customerId == draft.customerId && existing.saleDateEpochDay == draft.dateEpochDay) existing.invoiceNo else generateInvoiceNumber(customer, draft.dateEpochDay)
         var sale = SaleEntity(
-            id = draft.id,
-            invoiceNo = invoiceNo,
-            saleDateEpochDay = draft.dateEpochDay,
-            customerId = draft.customerId,
-            vatType = draft.vatType,
-            netPence = totalNet,
-            vatPence = totalVat,
-            grossPence = totalGross,
-            reverseVatPence = totalReverse,
-            notes = draft.notes.trim(),
-            pdfPath = existing?.pdfPath,
-            updatedAtMillis = System.currentTimeMillis()
+            id = draft.id, invoiceNo = invoiceNo, saleDateEpochDay = draft.dateEpochDay,
+            customerId = draft.customerId, vatType = draft.vatType, netPence = totalNet, vatPence = totalVat,
+            grossPence = totalGross, reverseVatPence = totalReverse, notes = draft.notes.trim(),
+            pdfPath = existing?.pdfPath, updatedAtMillis = System.currentTimeMillis()
         )
         val saleId = if (existing == null) dao.insertSale(sale) else { dao.updateSale(sale); sale.id }
         sale = sale.copy(id = saleId)
@@ -444,13 +431,9 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val newLines = mutableListOf<SaleLineEntity>()
         lineBreakdowns.forEach { (line, breakdown) ->
             val lineEntity = SaleLineEntity(
-                saleId = saleId,
-                item = line.item.trim(),
-                quantity = line.quantity,
-                unitGrossPence = line.unitGrossPence,
-                lineGrossPence = breakdown.grossPence,
-                lineNetPence = breakdown.netPence,
-                lineVatPence = breakdown.vatPence
+                saleId = saleId, item = line.item.trim(), quantity = line.quantity,
+                unitGrossPence = line.unitGrossPence, lineGrossPence = breakdown.grossPence,
+                lineNetPence = breakdown.netPence, lineVatPence = breakdown.vatPence
             )
             val lineId = dao.insertSaleLine(lineEntity)
             val savedLine = lineEntity.copy(id = lineId)
@@ -475,10 +458,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val returnAllocations = dao.getSaleReturnAllocations()
         val allocationById = allocations.associateBy { it.id }
         val restoredByPurchase = mutableMapOf<Long, Int>()
-        returnAllocations.forEach { ra ->
-            val pId = allocationById[ra.saleAllocationId]?.purchaseId ?: return@forEach
-            restoredByPurchase[pId] = (restoredByPurchase[pId] ?: 0) + ra.quantity
-        }
+        returnAllocations.forEach { ra -> allocationById[ra.saleAllocationId]?.purchaseId?.let { pId -> restoredByPurchase[pId] = (restoredByPurchase[pId] ?: 0) + ra.quantity } }
         val soldByPurchase = allocations.groupBy { it.purchaseId }.mapValues { e -> e.value.sumOf { it.quantity } }
         var remaining = line.quantity
         purchases.sortedWith(compareBy<PurchaseEntity> { it.purchaseDateEpochDay }.thenBy { it.id }).forEach { p ->
@@ -500,19 +480,15 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val sale = dao.getSale(line.saleId) ?: error("Sale not found")
         val existingReturns = dao.getSaleReturns().filter { it.saleLineId == saleLineId }.sumOf { it.quantity }
         require(quantity > 0 && existingReturns + quantity <= line.quantity) { "Return quantity exceeds quantity sold" }
-        val gross = line.unitGrossPence * quantity
-        val breakdown = breakdownFromGross(gross, sale.vatType)
-        val returnId = dao.insertSaleReturn(
-            SaleReturnEntity(
-                saleLineId = saleLineId, returnDateEpochDay = day, quantity = quantity,
-                refundGrossPence = breakdown.grossPence, refundNetPence = breakdown.netPence,
-                refundVatPence = breakdown.vatPence, restock = restock, notes = notes.trim()
-            )
-        )
+        val breakdown = breakdownFromGross(line.unitGrossPence * quantity, sale.vatType)
+        val returnId = dao.insertSaleReturn(SaleReturnEntity(
+            saleLineId = saleLineId, returnDateEpochDay = day, quantity = quantity,
+            refundGrossPence = breakdown.grossPence, refundNetPence = breakdown.netPence,
+            refundVatPence = breakdown.vatPence, restock = restock, notes = notes.trim()
+        ))
         if (restock) {
             val allocations = dao.getSaleAllocations().filter { it.saleLineId == saleLineId }.sortedByDescending { it.id }
-            val previousReturnAllocations = dao.getSaleReturnAllocations()
-            val alreadyRestored = previousReturnAllocations.groupBy { it.saleAllocationId }.mapValues { it.value.sumOf { r -> r.quantity } }
+            val alreadyRestored = dao.getSaleReturnAllocations().groupBy { it.saleAllocationId }.mapValues { it.value.sumOf { r -> r.quantity } }
             var remaining = quantity
             allocations.forEach { a ->
                 if (remaining <= 0) return@forEach
@@ -540,4 +516,10 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     )
 
     fun enqueueSync() = DropboxSyncWorker.enqueue(context)
+
+    private fun defaultPeriodName(start: Long, end: Long): String {
+        val s = LocalDate.ofEpochDay(start)
+        val e = LocalDate.ofEpochDay(end)
+        return if (s.year == e.year) s.year.toString() else "${s.year}-${e.year}"
+    }
 }
