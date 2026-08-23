@@ -22,7 +22,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import com.apingu.purchasesales.data.*
 import com.apingu.purchasesales.util.*
-import java.time.LocalDate
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -87,12 +86,14 @@ fun ExpenseEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
 @Composable
 fun ReportsScreen(vm: AppViewModel, nav: NavHostController) {
     val s by vm.summary.collectAsStateWithLifecycle()
+    val period by vm.selectedAccountingPeriod.collectAsStateWithLifecycle()
     val excelLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) { it?.let(vm::exportExcel) }
     ScreenScaffold("Profit & VAT", onBack = { nav.popBackStack() }) { inner -> LazyColumn(Modifier.padding(inner), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { AccountingPeriodSelector(vm) }
         item { MetricCard("Net sales", formatMoney(s.salesNet), Modifier.fillMaxWidth()) }; item { MetricCard("Cost of goods sold", formatMoney(s.cogsNet), Modifier.fillMaxWidth()) }; item { MetricCard("Gross profit", formatMoney(s.grossProfit), Modifier.fillMaxWidth()) }; item { MetricCard("Expenses", formatMoney(s.expensesNet), Modifier.fillMaxWidth()) }; item { MetricCard("Net trading profit", formatMoney(s.netProfit), Modifier.fillMaxWidth()) }
         item { HorizontalDivider(); Text("VAT analysis", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold) }
         item { ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) { ReportLine("Output VAT on sales", s.outputVat); ReportLine("Recoverable purchase/expense VAT", s.inputVat); ReportLine("Reverse VAT output (notional)", s.reverseOutputVat); ReportLine("Reverse VAT input (notional)", -s.reverseInputVat); HorizontalDivider(); ReportLine(if (s.vatPosition >= 0) "VAT due to HMRC" else "VAT refund expected", kotlin.math.abs(s.vatPosition), true) } } }
-        item { Button({ excelLauncher.launch("Business_Records.xlsx") }, Modifier.fillMaxWidth()) { Icon(Icons.Default.TableView, null); Text(" Export accounting-period Excel") } }
+        item { Button({ excelLauncher.launch("Business_Records_${period?.name?.replace(Regex("[^A-Za-z0-9._-]+"), "_") ?: "Accounting_Period"}.xlsx") }, Modifier.fillMaxWidth()) { Icon(Icons.Default.TableView, null); Text(" Export selected-period Excel") } }
     } }
 }
 
@@ -102,13 +103,15 @@ fun ReportsScreen(vm: AppViewModel, nav: NavHostController) {
 @Composable
 fun DocumentsScreen(vm: AppViewModel, nav: NavHostController) {
     val business by vm.business.collectAsStateWithLifecycle()
+    val period by vm.selectedAccountingPeriod.collectAsStateWithLifecycle()
     val treeLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { it?.let(vm::exportDocuments) }
     val excelLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) { it?.let(vm::exportExcel) }
     ScreenScaffold("Documents & Dropbox", onBack = { nav.popBackStack() }) { inner -> Column(Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        AccountingPeriodSelector(vm)
         ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) { Text("Bulk document export", fontWeight = FontWeight.SemiBold); Text("Copies all attached purchase invoices, generated sales invoices and expense receipts to a folder you choose.", style = MaterialTheme.typography.bodySmall); Spacer(Modifier.height(10.dp)); Button({ treeLauncher.launch(null) }) { Icon(Icons.Default.FolderOpen, null); Text(" Choose folder & export") } } }
-        ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) { Text("Excel", fontWeight = FontWeight.SemiBold); Text("Generates PUR, SALES, EXPENSES and PROFIT & VAT sheets for your accounting period.", style = MaterialTheme.typography.bodySmall); Spacer(Modifier.height(10.dp)); Button({ excelLauncher.launch("Business_Records.xlsx") }) { Icon(Icons.Default.Download, null); Text(" Export Excel") } } }
+        ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) { Text("Excel", fontWeight = FontWeight.SemiBold); Text("Generates PUR, SALES, EXPENSES and PROFIT & VAT sheets for the selected accounting period.", style = MaterialTheme.typography.bodySmall); Spacer(Modifier.height(10.dp)); Button({ excelLauncher.launch("Business_Records_${period?.name?.replace(Regex("[^A-Za-z0-9._-]+"), "_") ?: "Accounting_Period"}.xlsx") }) { Icon(Icons.Default.Download, null); Text(" Export Excel") } } }
         ElevatedCard(Modifier.fillMaxWidth()) { Column(Modifier.padding(16.dp)) { Text("Dropbox auto-sync", fontWeight = FontWeight.SemiBold); Text(if (business.dropboxAutoSync) "Enabled • ${business.dropboxRoot}" else "Disabled — configure in Business Details", style = MaterialTheme.typography.bodySmall); Spacer(Modifier.height(10.dp)); OutlinedButton({ vm.syncNow() }, enabled = business.dropboxAutoSync) { Icon(Icons.Default.CloudSync, null); Text(" Sync now") } } }
-        Text("Recovery sync maintains PURCHASES.txt, PENDING_PURCHASES.txt and INVENTORY.txt in Dropbox, plus a current Excel workbook and invoice/receipt copies.", style = MaterialTheme.typography.bodySmall)
+        Text("Dropbox keeps recovery/inventory dumps globally, while accounting workbooks and individual purchase/sales/expense documents are segregated into their matching accounting-period folders.", style = MaterialTheme.typography.bodySmall)
     } }
 }
 
@@ -118,14 +121,30 @@ fun BusinessScreen(vm: AppViewModel, nav: NavHostController) {
     val b by vm.business.collectAsStateWithLifecycle()
     val uriHandler = LocalUriHandler.current
     var showDropboxTokenHelp by remember { mutableStateOf(false) }
-    var name by remember(b) { mutableStateOf(b.businessName) }; var address by remember(b) { mutableStateOf(b.address) }; var vat by remember(b) { mutableStateOf(b.vatNumber) }; var company by remember(b) { mutableStateOf(b.companyNumber) }; var email by remember(b) { mutableStateOf(b.email) }; var phone by remember(b) { mutableStateOf(b.phone) }; var bank by remember(b) { mutableStateOf(b.bankDetails) }; var terms by remember(b) { mutableStateOf(b.invoiceTerms) }; var footer by remember(b) { mutableStateOf(b.invoiceFooter) }; var start by remember(b) { mutableStateOf(if (b.accountingStartEpochDay > 0) editDate(b.accountingStartEpochDay) else editDate(LocalDate.now().withDayOfYear(1).toEpochDay())) }; var end by remember(b) { mutableStateOf(if (b.accountingEndEpochDay > 0) editDate(b.accountingEndEpochDay) else editDate(LocalDate.now().withMonth(12).withDayOfMonth(31).toEpochDay())) }; var dbToken by remember(b) { mutableStateOf(b.dropboxAccessToken) }; var dbKey by remember(b) { mutableStateOf(b.dropboxAppKey) }; var dbRefresh by remember(b) { mutableStateOf(b.dropboxRefreshToken) }; var dbRoot by remember(b) { mutableStateOf(b.dropboxRoot) }; var auto by remember(b) { mutableStateOf(b.dropboxAutoSync) }
+    var name by remember(b) { mutableStateOf(b.businessName) }
+    var address by remember(b) { mutableStateOf(b.address) }
+    var vat by remember(b) { mutableStateOf(b.vatNumber) }
+    var company by remember(b) { mutableStateOf(b.companyNumber) }
+    var email by remember(b) { mutableStateOf(b.email) }
+    var phone by remember(b) { mutableStateOf(b.phone) }
+    var bank by remember(b) { mutableStateOf(b.bankDetails) }
+    var terms by remember(b) { mutableStateOf(b.invoiceTerms) }
+    var footer by remember(b) { mutableStateOf(b.invoiceFooter) }
+    var dbToken by remember(b) { mutableStateOf(b.dropboxAccessToken) }
+    var dbKey by remember(b) { mutableStateOf(b.dropboxAppKey) }
+    var dbRefresh by remember(b) { mutableStateOf(b.dropboxRefreshToken) }
+    var dbRoot by remember(b) { mutableStateOf(b.dropboxRoot) }
+    var auto by remember(b) { mutableStateOf(b.dropboxAutoSync) }
+
     ScreenScaffold("Business Details", onBack = { nav.popBackStack() }) { inner -> Column(Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         FormField("Business name", name, { name = it }); FormField("Business address", address, { address = it }, singleLine = false); FormField("VAT number", vat, { vat = it }); FormField("Company number", company, { company = it }); FormField("Email", email, { email = it }); FormField("Phone", phone, { phone = it }); FormField("Bank/payment details for invoices", bank, { bank = it }, singleLine = false); FormField("Invoice terms", terms, { terms = it }); FormField("Invoice footer", footer, { footer = it }, singleLine = false)
-        HorizontalDivider(); Text("Accounting period", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); FormField("Period start (DD/MM/YYYY)", start, { start = it }); FormField("Period end (DD/MM/YYYY)", end, { end = it })
+        HorizontalDivider()
+        AccountingPeriodsManager(vm)
         HorizontalDivider(); Text("Dropbox", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); Text("The simplest setup is to paste a generated Dropbox access token for your own account.", style = MaterialTheme.typography.bodySmall)
+        Text("Each purchase invoice, sales PDF, expense receipt and Excel workbook is automatically placed under its matching Accounting Periods/<period name>/ folder based on the transaction date.", style = MaterialTheme.typography.bodySmall)
         TextButton(onClick = { showDropboxTokenHelp = true }, contentPadding = PaddingValues(0.dp)) { Icon(Icons.Default.HelpOutline, null); Spacer(Modifier.width(6.dp)); Text("How do I get an access token?") }
         FormField("Dropbox access token", dbToken, { dbToken = it }); FormField("Dropbox App Key (optional)", dbKey, { dbKey = it }); FormField("Dropbox refresh token (optional)", dbRefresh, { dbRefresh = it }); FormField("Dropbox root folder", dbRoot, { dbRoot = it }); Row(verticalAlignment = Alignment.CenterVertically) { Switch(auto, { auto = it }); Spacer(Modifier.width(10.dp)); Text("Automatic Dropbox sync") }
-        Button({ vm.saveBusiness(BusinessEntity(1, name, address, vat, company, email, phone, bank, terms, footer, parseDateOrToday(start), parseDateOrToday(end), dbToken, dbKey, dbRefresh, dbRoot, auto)) { nav.popBackStack() } }, Modifier.fillMaxWidth()) { Icon(Icons.Default.Save, null); Text(" Save business details") }; Spacer(Modifier.height(20.dp))
+        Button({ vm.saveBusiness(b.copy(businessName = name, address = address, vatNumber = vat, companyNumber = company, email = email, phone = phone, bankDetails = bank, invoiceTerms = terms, invoiceFooter = footer, dropboxAccessToken = dbToken, dropboxAppKey = dbKey, dropboxRefreshToken = dbRefresh, dropboxRoot = dbRoot, dropboxAutoSync = auto)) { nav.popBackStack() } }, Modifier.fillMaxWidth()) { Icon(Icons.Default.Save, null); Text(" Save business details") }; Spacer(Modifier.height(20.dp))
     } }
 
     if (showDropboxTokenHelp) {
@@ -159,9 +178,9 @@ fun MoreScreen(nav: NavHostController) {
     ScreenScaffold("More") { inner -> LazyColumn(Modifier.padding(inner), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item { MoreRow(Icons.Default.People, "Customers", "Saved customer cards and invoice codes") { nav.navigate("customers") } }
         item { MoreRow(Icons.Default.Payments, "Expenses", "Expenses and receipt attachments") { nav.navigate("expenses") } }
-        item { MoreRow(Icons.Default.Assessment, "Profit & VAT", "Profit, VAT due/refund and accounting-period export") { nav.navigate("reports") } }
-        item { MoreRow(Icons.Default.FolderCopy, "Documents & Dropbox", "Bulk invoice export, Excel and cloud sync") { nav.navigate("documents") } }
-        item { MoreRow(Icons.Default.Business, "Business Details", "Company data, accounting period and Dropbox") { nav.navigate("business") } }
+        item { MoreRow(Icons.Default.Assessment, "Profit & VAT", "Profit, VAT due/refund and selected-period export") { nav.navigate("reports") } }
+        item { MoreRow(Icons.Default.FolderCopy, "Documents & Dropbox", "Period-segregated invoices, Excel and cloud sync") { nav.navigate("documents") } }
+        item { MoreRow(Icons.Default.Business, "Business Details", "Company data, accounting periods and Dropbox") { nav.navigate("business") } }
     } }
 }
 
