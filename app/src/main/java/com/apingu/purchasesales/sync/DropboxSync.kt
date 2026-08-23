@@ -110,6 +110,17 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
                 }
             }
 
+            // Previous APKs used /Purchases/<year>, /Sales/<year>, /Expenses/<year> and
+            // /Excel/<year>. Only remove those app-generated period subfolders after the new
+            // period-aware copies have been written successfully, so old mixed copies cannot
+            // remain alongside the new Accounting Periods structure.
+            periods.map(::legacyPeriodLabel).distinct().forEach { label ->
+                DropboxApi.deleteIfExists(token, "$root/Purchases/$label")
+                DropboxApi.deleteIfExists(token, "$root/Sales/$label")
+                DropboxApi.deleteIfExists(token, "$root/Expenses/$label")
+                DropboxApi.deleteIfExists(token, "$root/Excel/$label")
+            }
+
             db.close()
             Result.success()
         } catch (_: Exception) {
@@ -174,11 +185,17 @@ object DropboxApi {
     private fun json(v: String) = v.replace("\\", "\\\\").replace("\"", "\\\"")
 }
 
-private fun safePeriod(period: AccountingPeriodEntity): String {
-    val name = safe(period.name).ifBlank { "Accounting_Period" }
-    return name
+private fun safePeriod(period: AccountingPeriodEntity): String =
+    safe(period.name).ifBlank { "Accounting_Period" }
+
+private fun legacyPeriodLabel(period: AccountingPeriodEntity): String {
+    val start = LocalDate.ofEpochDay(period.startEpochDay)
+    val end = LocalDate.ofEpochDay(period.endEpochDay)
+    return if (start.year == end.year) start.year.toString() else "${start.year}-${end.year}"
 }
+
 private fun safe(value: String) = value.replace(Regex("[^A-Za-z0-9._-]+"), "_").trim('_').take(64)
+
 private fun purchasesDump(items: List<PurchaseEntity>) = buildString {
     appendLine("PURCHASES RECOVERY DUMP")
     appendLine("Generated: ${LocalDate.now()}")
@@ -212,7 +229,11 @@ private fun purchasesDump(items: List<PurchaseEntity>) = buildString {
         appendLine("------------------------------------------------------------")
     }
 }
-private fun pendingDump(items: List<PurchaseEntity>) = purchasesDump(items.filter { it.status in setOf("RECEIPT_PENDING", "PARTIALLY_RECEIVED", "REFUND_PENDING", "RETURNED") })
+
+private fun pendingDump(items: List<PurchaseEntity>) = purchasesDump(
+    items.filter { it.status in setOf("RECEIPT_PENDING", "PARTIALLY_RECEIVED", "REFUND_PENDING", "RETURNED") }
+)
+
 private fun inventoryDump(items: List<InventoryRow>) = buildString {
     appendLine("INVENTORY RECOVERY DUMP")
     appendLine("Generated: ${LocalDate.now()}")
