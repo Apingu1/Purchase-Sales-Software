@@ -23,11 +23,13 @@ import com.apingu.purchasesales.util.*
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
-    val sales by vm.sales.collectAsStateWithLifecycle()
+    val allSales by vm.sales.collectAsStateWithLifecycle()
+    val period by vm.selectedAccountingPeriod.collectAsStateWithLifecycle()
     val customers by vm.customers.collectAsStateWithLifecycle()
     val lines by vm.saleLines.collectAsStateWithLifecycle()
     var returnSale by remember { mutableStateOf<SaleEntity?>(null) }
     val customerMap = customers.associateBy { it.id }
+    val sales = if (period == null) emptyList() else allSales.filter { it.saleDateEpochDay in period!!.startEpochDay..period!!.endEpochDay }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Sales") }) },
@@ -35,55 +37,57 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
             FloatingActionButton({ nav.navigate("sale/new") }) { Icon(Icons.Default.Add, "New sale") }
         }
     ) { inner ->
-        if (sales.isEmpty()) {
-            Box(Modifier.padding(inner).fillMaxSize(), contentAlignment = Alignment.Center) {
-                EmptyState("No sales invoices yet")
-            }
-        } else {
-            LazyColumn(
-                Modifier.padding(inner),
-                contentPadding = PaddingValues(12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                items(sales, key = { it.id }) { sale ->
-                    val saleItems = lines.filter { it.saleId == sale.id }
-                    val totalQty = saleItems.sumOf { it.quantity }
-                    val itemSummary = when {
-                        saleItems.isEmpty() -> "No item lines"
-                        saleItems.size == 1 -> "${saleItems.first().item} × ${saleItems.first().quantity}"
-                        else -> {
-                            val firstTwo = saleItems.take(2).joinToString(" • ") { "${it.item} × ${it.quantity}" }
-                            if (saleItems.size > 2) "$firstTwo • +${saleItems.size - 2} more" else firstTwo
-                        }
-                    }
-                    ElevatedCard(Modifier.fillMaxWidth()) {
-                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                            Row(Modifier.fillMaxWidth()) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(sale.invoiceNo, fontWeight = FontWeight.Bold)
-                                    Text(customerMap[sale.customerId]?.companyName ?: "Customer", style = MaterialTheme.typography.bodySmall)
-                                }
-                                Text(formatMoney(sale.grossPence), fontWeight = FontWeight.Bold)
-                            }
-                            Text(itemSummary, style = MaterialTheme.typography.bodyMedium)
-                            Text(
-                                "${saleItems.size} item line${if (saleItems.size == 1) "" else "s"} • $totalQty units • ${displayDate(sale.saleDateEpochDay)} • ${VatTypes.label(sale.vatType)}",
-                                style = MaterialTheme.typography.bodySmall
-                            )
-                            Row {
-                                TextButton({ nav.navigate("sale/${sale.id}") }) {
-                                    Icon(Icons.Default.Edit, null)
-                                    Text(" Edit")
-                                }
-                                TextButton({ returnSale = sale }) {
-                                    Icon(Icons.Default.KeyboardReturn, null)
-                                    Text(" Return/refund")
-                                }
-                            }
-                        }
-                    }
+        Column(Modifier.padding(inner)) {
+            AccountingPeriodSelector(vm, Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+            if (sales.isEmpty()) {
+                Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    EmptyState("No sales invoices in this accounting period")
                 }
-                item { Spacer(Modifier.height(70.dp)) }
+            } else {
+                LazyColumn(
+                    contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    items(sales, key = { it.id }) { sale ->
+                        val saleItems = lines.filter { it.saleId == sale.id }
+                        val totalQty = saleItems.sumOf { it.quantity }
+                        val itemSummary = when {
+                            saleItems.isEmpty() -> "No item lines"
+                            saleItems.size == 1 -> "${saleItems.first().item} × ${saleItems.first().quantity}"
+                            else -> {
+                                val firstTwo = saleItems.take(2).joinToString(" • ") { "${it.item} × ${it.quantity}" }
+                                if (saleItems.size > 2) "$firstTwo • +${saleItems.size - 2} more" else firstTwo
+                            }
+                        }
+                        ElevatedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Row(Modifier.fillMaxWidth()) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(sale.invoiceNo, fontWeight = FontWeight.Bold)
+                                        Text(customerMap[sale.customerId]?.companyName ?: "Customer", style = MaterialTheme.typography.bodySmall)
+                                    }
+                                    Text(formatMoney(sale.grossPence), fontWeight = FontWeight.Bold)
+                                }
+                                Text(itemSummary, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    "${saleItems.size} item line${if (saleItems.size == 1) "" else "s"} • $totalQty units • ${displayDate(sale.saleDateEpochDay)} • ${VatTypes.label(sale.vatType)}",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Row {
+                                    TextButton({ nav.navigate("sale/${sale.id}") }) {
+                                        Icon(Icons.Default.Edit, null)
+                                        Text(" Edit")
+                                    }
+                                    TextButton({ returnSale = sale }) {
+                                        Icon(Icons.Default.KeyboardReturn, null)
+                                        Text(" Return/refund")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    item { Spacer(Modifier.height(70.dp)) }
+                }
             }
         }
     }
