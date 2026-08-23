@@ -24,7 +24,17 @@ data class BusinessEntity(
     val dropboxAppKey: String = "",
     val dropboxRefreshToken: String = "",
     val dropboxRoot: String = "/Purchase-Sales-Software",
-    val dropboxAutoSync: Boolean = false
+    val dropboxAutoSync: Boolean = false,
+    @ColumnInfo(defaultValue = "0") val selectedAccountingPeriodId: Long = 0
+)
+
+@Entity(tableName = "accounting_periods")
+data class AccountingPeriodEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val name: String,
+    val startEpochDay: Long,
+    val endEpochDay: Long,
+    val createdAtMillis: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "customers", indices = [Index(value = ["invoiceCode"], unique = true)])
@@ -40,7 +50,6 @@ data class CustomerEntity(
     val notes: String = ""
 )
 
-/** One supplier order header can contain any number of independently tracked purchase lines. */
 @Entity(tableName = "purchase_orders")
 data class PurchaseOrderEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
@@ -167,6 +176,13 @@ interface AppDao {
     @Query("SELECT * FROM business WHERE id = 1") suspend fun getBusiness(): BusinessEntity?
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun saveBusiness(value: BusinessEntity)
 
+    @Query("SELECT * FROM accounting_periods ORDER BY startEpochDay DESC, id DESC") fun observeAccountingPeriods(): Flow<List<AccountingPeriodEntity>>
+    @Query("SELECT * FROM accounting_periods ORDER BY startEpochDay ASC, id ASC") suspend fun getAccountingPeriods(): List<AccountingPeriodEntity>
+    @Query("SELECT * FROM accounting_periods WHERE id = :id") suspend fun getAccountingPeriod(id: Long): AccountingPeriodEntity?
+    @Insert suspend fun insertAccountingPeriod(value: AccountingPeriodEntity): Long
+    @Update suspend fun updateAccountingPeriod(value: AccountingPeriodEntity)
+    @Delete suspend fun deleteAccountingPeriod(value: AccountingPeriodEntity)
+
     @Query("SELECT * FROM customers ORDER BY companyName COLLATE NOCASE") fun observeCustomers(): Flow<List<CustomerEntity>>
     @Query("SELECT * FROM customers ORDER BY companyName COLLATE NOCASE") suspend fun getCustomers(): List<CustomerEntity>
     @Query("SELECT * FROM customers WHERE id = :id") suspend fun getCustomer(id: Long): CustomerEntity?
@@ -216,7 +232,7 @@ interface AppDao {
 
     @Query("SELECT * FROM sale_return_allocations ORDER BY id") fun observeSaleReturnAllocations(): Flow<List<SaleReturnAllocationEntity>>
     @Query("SELECT * FROM sale_return_allocations ORDER BY id") suspend fun getSaleReturnAllocations(): List<SaleReturnAllocationEntity>
-    @Insert suspend fun insertSaleReturnAllocation(value: SaleReturnAllocationEntity): Long
+    @Insert suspend fun insertSaleReturnAllocation(value: SaleReturnAllocationEntity)
 
     @Query("SELECT * FROM expenses ORDER BY expenseDateEpochDay DESC, id DESC") fun observeExpenses(): Flow<List<ExpenseEntity>>
     @Query("SELECT * FROM expenses ORDER BY expenseDateEpochDay ASC, id ASC") suspend fun getExpenses(): List<ExpenseEntity>
@@ -227,11 +243,12 @@ interface AppDao {
 
 @Database(
     entities = [
-        BusinessEntity::class, CustomerEntity::class, PurchaseOrderEntity::class, PurchaseEntity::class,
-        SaleEntity::class, SaleLineEntity::class, SaleAllocationEntity::class,
-        SaleReturnEntity::class, SaleReturnAllocationEntity::class, ExpenseEntity::class
+        BusinessEntity::class, AccountingPeriodEntity::class, CustomerEntity::class,
+        PurchaseOrderEntity::class, PurchaseEntity::class, SaleEntity::class, SaleLineEntity::class,
+        SaleAllocationEntity::class, SaleReturnEntity::class, SaleReturnAllocationEntity::class,
+        ExpenseEntity::class
     ],
-    version = 3,
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -240,8 +257,7 @@ abstract class AppDatabase : RoomDatabase() {
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL(
-                    """
+                db.execSQL("""
                     CREATE TABLE IF NOT EXISTS `purchase_orders` (
                         `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
                         `purchaseDateEpochDay` INTEGER NOT NULL,
@@ -254,18 +270,15 @@ abstract class AppDatabase : RoomDatabase() {
                         `notes` TEXT NOT NULL,
                         `updatedAtMillis` INTEGER NOT NULL
                     )
-                    """.trimIndent()
-                )
+                """.trimIndent())
                 db.execSQL("ALTER TABLE `purchases` ADD COLUMN `purchaseOrderId` INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_purchases_purchaseOrderId` ON `purchases` (`purchaseOrderId`)")
-                db.execSQL(
-                    """
+                db.execSQL("""
                     INSERT OR IGNORE INTO `purchase_orders`
                     (`id`,`purchaseDateEpochDay`,`supplier`,`orderNumber`,`accountUsername`,`vatType`,`paymentMethod`,`invoicePath`,`notes`,`updatedAtMillis`)
                     SELECT `id`,`purchaseDateEpochDay`,`supplier`,`orderNumber`,`accountUsername`,`vatType`,`paymentMethod`,`invoicePath`,`notes`,`updatedAtMillis`
                     FROM `purchases`
-                    """.trimIndent()
-                )
+                """.trimIndent())
                 db.execSQL("UPDATE `purchases` SET `purchaseOrderId` = `id` WHERE `purchaseOrderId` = 0")
             }
         }
@@ -275,10 +288,31 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE `purchases` ADD COLUMN `partialRefund` INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE `purchases` ADD COLUMN `refundNetPence` INTEGER NOT NULL DEFAULT 0")
                 db.execSQL("ALTER TABLE `purchases` ADD COLUMN `refundVatPence` INTEGER NOT NULL DEFAULT 0")
-                // Existing V2 refund records used an automatic gross split. Preserve that legacy result;
-                // users can edit the new explicit Net/VAT breakdown afterwards where the supplier credit differs.
                 db.execSQL("UPDATE `purchases` SET `refundNetPence` = CASE WHEN `refundExpectedPence` > 0 AND `vatType` = 'STANDARD' THEN CAST(ROUND(`refundExpectedPence` / 1.2) AS INTEGER) WHEN `refundExpectedPence` > 0 THEN `refundExpectedPence` ELSE 0 END")
                 db.execSQL("UPDATE `purchases` SET `refundVatPence` = CASE WHEN `refundExpectedPence` > 0 AND `vatType` = 'STANDARD' THEN `refundExpectedPence` - `refundNetPence` ELSE 0 END")
+            }
+        }
+
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `business` ADD COLUMN `selectedAccountingPeriodId` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `accounting_periods` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `name` TEXT NOT NULL,
+                        `startEpochDay` INTEGER NOT NULL,
+                        `endEpochDay` INTEGER NOT NULL,
+                        `createdAtMillis` INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("""
+                    INSERT OR IGNORE INTO `accounting_periods`
+                    (`id`,`name`,`startEpochDay`,`endEpochDay`,`createdAtMillis`)
+                    SELECT 1,'Existing accounting period',`accountingStartEpochDay`,`accountingEndEpochDay`,CAST(strftime('%s','now') AS INTEGER) * 1000
+                    FROM `business`
+                    WHERE `id` = 1 AND `accountingStartEpochDay` > 0 AND `accountingEndEpochDay` >= `accountingStartEpochDay`
+                """.trimIndent())
+                db.execSQL("UPDATE `business` SET `selectedAccountingPeriodId` = CASE WHEN EXISTS(SELECT 1 FROM `accounting_periods` WHERE `id` = 1) THEN 1 ELSE 0 END WHERE `id` = 1")
             }
         }
 
@@ -286,6 +320,6 @@ abstract class AppDatabase : RoomDatabase() {
             context.applicationContext,
             AppDatabase::class.java,
             "purchase-sales.db"
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).fallbackToDestructiveMigration().build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).fallbackToDestructiveMigration().build()
     }
 }
