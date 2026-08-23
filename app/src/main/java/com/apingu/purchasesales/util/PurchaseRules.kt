@@ -25,9 +25,10 @@ private fun isClosedAndFullyRefundedPurchase(purchase: PurchaseEntity): Boolean 
         purchase.refundExpectedPence > 0 &&
         purchase.refundReceivedPence >= purchase.refundExpectedPence
 
-/**
- * A supplier invoice belongs to the whole order, so Dropbox removes it only when every line is
- * closed and fully refunded. Mixed orders keep the invoice for the remaining valid purchases.
- */
+/** A supplier invoice is removed only when every line on the order is fully closed/refunded. */
 fun isCancelledAndFullyRefundedOrder(lines: List<PurchaseEntity>): Boolean =
     lines.isNotEmpty() && lines.all(::isClosedAndFullyRefundedPurchase)
+
+/** Clearer alias used by the period-aware Dropbox synchroniser. */
+fun isFullyRefundedOrderForDropbox(lines: List<PurchaseEntity>): Boolean =
+    isCancelledAndFullyRefundedOrder(lines)
