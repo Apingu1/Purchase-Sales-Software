@@ -114,11 +114,13 @@ fun buildFinanceSummary(
 ): FinanceSummary {
     val s = sales.filter { it.saleDateEpochDay in start..end }
     val e = expenses.filter { it.expenseDateEpochDay in start..end }
-    // A purchase that was completely cancelled and refunded is a voided transaction for the
-    // accounting period. Exclude it entirely instead of adding VAT then trying to reverse it.
-    val p = purchases.filter {
-        it.purchaseDateEpochDay in start..end && !isCancelledAndFullyRefundedPurchase(it)
-    }
+
+    // Keep the full period purchase set for operational refund tracking, but remove financially
+    // voided purchases from VAT/profit inputs. In particular, a fully cancelled order contributes
+    // zero purchase VAT even when an older record has incomplete refund-field metadata.
+    val periodPurchases = purchases.filter { it.purchaseDateEpochDay in start..end }
+    val p = periodPurchases.filterNot(::isVoidedPurchaseForAccounting)
+
     val saleIds = s.map { it.id }.toSet()
     val saleLineIdsInPeriod = saleLines.filter { it.saleId in saleIds }.map { it.id }.toSet()
 
@@ -143,7 +145,12 @@ fun buildFinanceSummary(
     val reverseInput = p.sumOf { it.reverseVatPence } - supplierReverseCredit + e.sumOf { it.reverseVatPence }
     val reverseOutput = reverseInput
     val inventory = buildInventory(purchases, allocations, returnAllocations).sumOf { it.inventoryNetCostPence }
-    val refundsPending = p.sumOf { (it.refundExpectedPence - it.refundReceivedPence).coerceAtLeast(0) }
+
+    // A cancelled order may still have money outstanding from the supplier. Keep that operational
+    // figure visible even though the cancelled purchase itself is excluded from VAT.
+    val refundsPending = periodPurchases
+        .filterNot { it.partialRefund }
+        .sumOf { (it.refundExpectedPence - it.refundReceivedPence).coerceAtLeast(0) }
 
     val allocationById = allocations.associateBy { it.id }
     val cogsOnPeriodSales = allocations.filter { it.saleLineId in saleLineIdsInPeriod }.sumOf { it.quantity * it.unitNetCostPence }
