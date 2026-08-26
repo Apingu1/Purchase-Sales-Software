@@ -150,7 +150,10 @@ fun SaleEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
                     Text("Items in this sale", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-                    Text("Add multiple inventory items to the same customer invoice", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "Identical purchases are consolidated in inventory. Select an item once and enter the total quantity to sell, e.g. Qty 10 for ten separately purchased phones.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
                 AssistChip(onClick = {}, label = { Text("${forms.size} line${if (forms.size == 1) "" else "s"}") })
             }
@@ -237,6 +240,7 @@ private fun SaleLineCard(
     val quantity = form.qty.toIntOrNull() ?: 0
     val unitGross = runCatching { moneyToPence(form.unitGross) }.getOrDefault(0)
     val lineGross = quantity * unitGross
+    val selectedInventory = inventory.firstOrNull { it.item.trim().equals(form.item.trim(), ignoreCase = true) }
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -264,11 +268,20 @@ private fun SaleLineCard(
                     }
                 }
             }
+            selectedInventory?.let { stock ->
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Consolidated stock available", style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f))
+                    AssistChip(onClick = {}, label = { Text("Qty ${stock.available}") })
+                }
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     form.qty,
                     { onChange(form.copy(qty = it)) },
-                    label = { Text("Qty") },
+                    label = { Text("Qty to sell") },
+                    supportingText = {
+                        selectedInventory?.let { Text("Up to ${it.available} currently available") }
+                    },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.weight(1f),
                     singleLine = true
@@ -280,6 +293,13 @@ private fun SaleLineCard(
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.weight(2f),
                     singleLine = true
+                )
+            }
+            if (selectedInventory != null && quantity > selectedInventory.available) {
+                Text(
+                    "Only ${selectedInventory.available} available. The invoice cannot be saved with Qty $quantity.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
                 )
             }
             if (lineGross > 0) {
