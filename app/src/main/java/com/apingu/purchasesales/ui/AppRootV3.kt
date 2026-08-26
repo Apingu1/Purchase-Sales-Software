@@ -275,6 +275,8 @@ private fun PurchasesScreenV3(vm: AppViewModel, nav: NavHostController) {
 @Composable
 private fun PurchaseOrderCardV3(order: PurchaseOrderEntity, lines: List<PurchaseEntity>, nav: NavHostController, vm: AppViewModel) {
     val status = purchaseOrderStatusV3(lines)
+    val isPending = status in PendingReceiptStatusesV3
+    var menuExpanded by remember(order.id) { mutableStateOf(false) }
     val totalGross = lines.sumOf { it.grossPence }
     val totalQty = lines.sumOf { it.quantity }
     val received = lines.sumOf { it.receivedQty }
@@ -294,15 +296,33 @@ private fun PurchaseOrderCardV3(order: PurchaseOrderEntity, lines: List<Purchase
                     Text(buildString { append(displayDate(order.purchaseDateEpochDay)); if (order.orderNumber.isNotBlank()) append(" • ${order.orderNumber}") }, style = MaterialTheme.typography.bodySmall)
                 }
                 AssistChip(onClick = {}, label = { Text(status.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }) })
+                if (isPending) {
+                    Box {
+                        IconButton(onClick = { menuExpanded = true }) {
+                            Icon(Icons.Default.MoreVert, contentDescription = "Purchase order actions")
+                        }
+                        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                            DropdownMenuItem(
+                                text = { Text("Duplicate order") },
+                                leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    nav.navigate("purchase/duplicate/${order.id}")
+                                }
+                            )
+                        }
+                    }
+                }
             }
             Text(itemText)
             Text("${lines.size} item line${if (lines.size == 1) "" else "s"} • Qty $totalQty • ${formatMoney(totalGross)} • ${VatTypes.label(order.vatType)}", style = MaterialTheme.typography.bodySmall)
             Text("Received $received • Returned $returned", style = MaterialTheme.typography.bodySmall)
             if (partialCredits > 0) Text("Partial refund credits ${formatMoney(partialCredits)}", style = MaterialTheme.typography.bodySmall)
-            if (status in PendingReceiptStatusesV3) {
-                Row {
-                    TextButton({ vm.markReceivedAllOrder(order.id) }) { Icon(Icons.Default.CheckCircle, null); Spacer(Modifier.width(5.dp)); Text("Receive all") }
-                    TextButton({ nav.navigate("purchase/duplicate/${order.id}") }) { Icon(Icons.Default.ContentCopy, null); Spacer(Modifier.width(5.dp)); Text("Duplicate") }
+            if (isPending) {
+                TextButton({ vm.markReceivedAllOrder(order.id) }) {
+                    Icon(Icons.Default.CheckCircle, null)
+                    Spacer(Modifier.width(5.dp))
+                    Text("Receive all remaining items")
                 }
             }
         }
@@ -344,7 +364,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
     var account by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.accountUsername.orEmpty()) }
     var vatType by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.vatType ?: VatTypes.STANDARD) }
     var payment by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.paymentMethod.orEmpty()) }
-    var orderNotes by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.notes.orEmpty()) }
+    var orderNotes by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(if (isDuplicate) "" else sourceOrder?.notes.orEmpty()) }
     var attachment by remember { mutableStateOf<Uri?>(null) }
 
     val forms = remember(sourceOrder?.id, sourceLines.size, isDuplicate) {
@@ -381,7 +401,11 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
         Column(Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (isDuplicate) {
                 ElevatedCard(Modifier.fillMaxWidth()) {
-                    Text("Copied from ${duplicateOrder?.orderNumber.orEmpty().ifBlank { "the original order" }}. Enter the new order number. Receipt/refund fields, invoice attachment and IMEI/serial notes have been cleared.", Modifier.padding(12.dp), style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        "Copied from ${duplicateOrder?.orderNumber.orEmpty().ifBlank { "the original order" }}. Order number, order notes, item IMEI/serial notes, receipt/refund fields and invoice attachment are intentionally blank. Enter the new order-specific details before saving.",
+                        Modifier.padding(12.dp),
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
             Text("Purchase details", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -574,11 +598,24 @@ private fun InventoryScreenV3(vm: AppViewModel) {
     ScreenScaffold("Inventory") { inner ->
         val available = inv.filter { it.available > 0 }
         if (available.isEmpty()) Box(Modifier.padding(inner).fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState("Received purchase items will appear here") }
-        else LazyColumn(Modifier.padding(inner), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            items(available, key = { it.item }) { row ->
+        else LazyColumn(
+            Modifier.padding(inner),
+            contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            item {
+                Text(
+                    "Identical item names are automatically consolidated. Ten individually purchased units of the same item appear as one inventory item with Qty 10.",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+            items(available, key = { it.item.lowercase() }) { row ->
                 ElevatedCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(16.dp)) {
-                        Row(Modifier.fillMaxWidth()) { Text(row.item, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); Text("${row.available} available", fontWeight = FontWeight.Bold) }
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(row.item, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                            AssistChip(onClick = {}, label = { Text("Qty ${row.available}") })
+                        }
                         Spacer(Modifier.height(6.dp))
                         Text("Purchased ${row.purchased} • Received ${row.received} • Sold ${row.sold} • Supplier returns ${row.supplierReturned}", style = MaterialTheme.typography.bodySmall)
                         Text("Inventory net cost ${formatMoney(row.inventoryNetCostPence)}", style = MaterialTheme.typography.bodySmall)
