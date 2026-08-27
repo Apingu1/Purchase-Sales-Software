@@ -137,13 +137,8 @@ object TraceableInvoicePdf {
         text("VAT", 390f, y, 10f); text(formatMoney(sale.vatPence), 490f, y, 10f, true); y += 18f
         text("TOTAL", 390f, y, 12f, true); text(formatMoney(sale.grossPence), 490f, y, 12f, true); y += 26f
 
-        when (sale.vatType) {
-            VatTypes.REVERSE -> {
-                paint.color = android.graphics.Color.RED
-                text("Reverse charge applies - customer to account for VAT. VAT charged: £0.00", 40f, y, 9f, true)
-                paint.color = android.graphics.Color.BLACK
-            }
-            VatTypes.NO_VAT -> text("No VAT charged on this invoice.", 40f, y, 9f)
+        if (sale.vatType == VatTypes.NO_VAT) {
+            text("No VAT charged on this invoice.", 40f, y, 9f)
         }
 
         y += 22f
