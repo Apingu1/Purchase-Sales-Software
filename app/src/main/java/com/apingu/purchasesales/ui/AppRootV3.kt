@@ -217,12 +217,12 @@ private fun PurchasesScreenV3(vm: AppViewModel, nav: NavHostController) {
     val periodOrders = if (period == null) emptyList() else orders.filter { it.purchaseDateEpochDay in period!!.startEpochDay..period!!.endEpochDay }
     val rows = periodOrders.map { order -> order to allLines.filter { it.purchaseOrderId == order.id } }
     val pendingCount = rows.count { (_, lines) -> purchaseOrderStatusV3(lines) in PendingReceiptStatusesV3 }
-    val otherCount = rows.size - pendingCount
+    val cancelledRefundedCount = rows.count { (_, lines) -> isCancelledOrRefundedOrderV3(lines) }
     val filtered = rows.filter { (order, lines) ->
         val status = purchaseOrderStatusV3(lines)
         val statusMatches = when (tab) {
             0 -> status in PendingReceiptStatusesV3
-            1 -> status !in PendingReceiptStatusesV3
+            1 -> isCancelledOrRefundedOrderV3(lines)
             else -> true
         }
         val q = query.trim()
@@ -239,7 +239,7 @@ private fun PurchasesScreenV3(vm: AppViewModel, nav: NavHostController) {
             AccountingPeriodSelector(vm, Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
             ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) {
                 Tab(tab == 0, { tab = 0 }, text = { Text("Pending receipts") })
-                Tab(tab == 1, { tab = 1 }, text = { Text("All others") })
+                Tab(tab == 1, { tab = 1 }, text = { Text("Cancelled / refunded") })
                 Tab(tab == 2, { tab = 2 }, text = { Text("All") })
             }
             OutlinedTextField(
@@ -254,7 +254,7 @@ private fun PurchasesScreenV3(vm: AppViewModel, nav: NavHostController) {
             Text(
                 when (tab) {
                     0 -> "Showing ${filtered.size} of $pendingCount pending receipt order${if (pendingCount == 1) "" else "s"}"
-                    1 -> "Showing ${filtered.size} of $otherCount other order${if (otherCount == 1) "" else "s"}"
+                    1 -> "Showing ${filtered.size} of $cancelledRefundedCount cancelled/refunded order${if (cancelledRefundedCount == 1) "" else "s"}"
                     else -> "Showing ${filtered.size} of ${rows.size} total order${if (rows.size == 1) "" else "s"}"
                 },
                 style = MaterialTheme.typography.bodySmall,
@@ -375,7 +375,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
                     id = if (isDuplicate) 0L else line.id,
                     item = line.item,
                     quantity = line.quantity.toString(),
-                    gross = formatMoneyPlain(line.grossPence),
+                    gross = formatMoneyPlain(unitGrossFromStoredLineV3(line.grossPence, line.quantity)),
                     // IMEI/serial notes are unit-specific, so deliberately clear them on a duplicate.
                     notes = if (isDuplicate) "" else line.notes.trim().takeUnless { it.isNotBlank() && it == legacyDuplicatedOrderNote }.orEmpty(),
                     received = if (isDuplicate) "" else line.receivedQty.takeIf { it > 0 }?.toString().orEmpty(),
@@ -392,7 +392,11 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { attachment = it }
-    val totalGross = forms.sumOf { runCatching { moneyToPence(it.gross) }.getOrDefault(0) }
+    val totalGross = forms.sumOf { form ->
+        val unitGross = runCatching { moneyToPence(form.gross) }.getOrDefault(0)
+        val quantity = (form.quantity.toIntOrNull() ?: 0).coerceAtLeast(0)
+        unitGross * quantity.toLong()
+    }
     val totalBreakdown = breakdownFromGross(totalGross, vatType)
     val totalQty = forms.sumOf { it.quantity.toIntOrNull() ?: 0 }
     val title = when { isDuplicate -> "Duplicate purchase"; id == 0L -> "New purchase"; else -> "Edit purchase" }
@@ -418,6 +422,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
 
             HorizontalDivider()
             Text("Items purchased", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text("Enter the gross purchase cost for one unit. The app multiplies it by Quantity to calculate the line total, net amount and VAT.", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
             Text("Item notes follow the allocated stock into the PDF sales invoice. For IMEI/serial-tracked devices, use one item line per device (Qty 1) so the exact identifier follows that unit.", style = MaterialTheme.typography.bodySmall)
 
             forms.forEachIndexed { index, form ->
@@ -453,20 +458,24 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
                             vatType = vatType,
                             paymentMethod = payment,
                             notes = orderNotes,
-                            items = forms.map { form -> PurchaseItemDraft(
-                                id = if (isDuplicate) 0L else form.id,
-                                item = form.item,
-                                quantity = form.quantity.toIntOrNull() ?: 0,
-                                grossPence = runCatching { moneyToPence(form.gross) }.getOrDefault(0),
-                                receivedQty = form.received.toIntOrNull() ?: 0,
-                                cancelledQty = form.cancelled.toIntOrNull() ?: 0,
-                                returnedQty = form.returned.toIntOrNull() ?: 0,
-                                refundExpectedPence = if (form.partialRefund) 0 else runCatching { moneyToPence(form.refundExpected) }.getOrDefault(0),
-                                refundReceivedPence = if (form.partialRefund) 0 else runCatching { moneyToPence(form.refundReceived) }.getOrDefault(0),
-                                partialRefund = form.partialRefund,
-                                refundNetPence = if (form.partialRefund) runCatching { moneyToPence(form.refundNet) }.getOrDefault(0) else 0,
-                                refundVatPence = if (form.partialRefund) runCatching { moneyToPence(form.refundVat) }.getOrDefault(0) else 0
-                            ) },
+                            items = forms.map { form ->
+                                val quantity = form.quantity.toIntOrNull() ?: 0
+                                val unitGross = runCatching { moneyToPence(form.gross) }.getOrDefault(0)
+                                PurchaseItemDraft(
+                                    id = if (isDuplicate) 0L else form.id,
+                                    item = form.item,
+                                    quantity = quantity,
+                                    grossPence = unitGross * quantity.coerceAtLeast(0).toLong(),
+                                    receivedQty = form.received.toIntOrNull() ?: 0,
+                                    cancelledQty = form.cancelled.toIntOrNull() ?: 0,
+                                    returnedQty = form.returned.toIntOrNull() ?: 0,
+                                    refundExpectedPence = if (form.partialRefund) 0 else runCatching { moneyToPence(form.refundExpected) }.getOrDefault(0),
+                                    refundReceivedPence = if (form.partialRefund) 0 else runCatching { moneyToPence(form.refundReceived) }.getOrDefault(0),
+                                    partialRefund = form.partialRefund,
+                                    refundNetPence = if (form.partialRefund) runCatching { moneyToPence(form.refundNet) }.getOrDefault(0) else 0,
+                                    refundVatPence = if (form.partialRefund) runCatching { moneyToPence(form.refundVat) }.getOrDefault(0) else 0
+                                )
+                            },
                             existingInvoicePath = if (isDuplicate) null else order?.invoicePath
                         ),
                         attachmentUri = attachment,
@@ -483,7 +492,8 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
 @Composable
 private fun PurchaseLineCardV3(index: Int, form: PurchaseLineFormV3, vatType: String, canDelete: Boolean, onChange: (PurchaseLineFormV3) -> Unit, onDelete: () -> Unit) {
     val qty = form.quantity.toIntOrNull() ?: 0
-    val grossPence = runCatching { moneyToPence(form.gross) }.getOrDefault(0)
+    val unitGrossPence = runCatching { moneyToPence(form.gross) }.getOrDefault(0)
+    val lineGrossPence = unitGrossPence * qty.coerceAtLeast(0).toLong()
     val refundNet = runCatching { moneyToPence(form.refundNet) }.getOrDefault(0)
     val refundVat = runCatching { moneyToPence(form.refundVat) }.getOrDefault(0)
 
@@ -495,7 +505,9 @@ private fun PurchaseLineCardV3(index: Int, form: PurchaseLineFormV3, vatType: St
             }
             FormField("Item", form.item, { onChange(form.copy(item = it)) })
             ResponsiveMoneyQuantityFields(form, onChange)
-            if (grossPence > 0 && qty > 0) Text("Unit gross ${formatMoney(grossPence / qty)}", style = MaterialTheme.typography.bodySmall)
+            if (unitGrossPence > 0 && qty > 0) {
+                Text("Line gross ${formatMoney(lineGrossPence)} • $qty × ${formatMoney(unitGrossPence)}", style = MaterialTheme.typography.bodySmall)
+            }
             FormField("Item notes / IMEI / serial number", form.notes, { onChange(form.copy(notes = it)) }, singleLine = false)
 
             HorizontalDivider()
@@ -552,12 +564,12 @@ private fun ResponsiveMoneyQuantityFields(form: PurchaseLineFormV3, onChange: (P
         if (maxWidth < 340.dp) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 NumberFieldV3("Quantity", form.quantity, Modifier.fillMaxWidth()) { onChange(form.copy(quantity = it)) }
-                DecimalFieldV3("Line gross £", form.gross, Modifier.fillMaxWidth()) { onChange(form.copy(gross = it)) }
+                DecimalFieldV3("Unit gross £", form.gross, Modifier.fillMaxWidth()) { onChange(form.copy(gross = it)) }
             }
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 NumberFieldV3("Quantity", form.quantity, Modifier.weight(1f)) { onChange(form.copy(quantity = it)) }
-                DecimalFieldV3("Line gross £", form.gross, Modifier.weight(2f)) { onChange(form.copy(gross = it)) }
+                DecimalFieldV3("Unit gross £", form.gross, Modifier.weight(2f)) { onChange(form.copy(gross = it)) }
             }
         }
     }
@@ -623,6 +635,23 @@ private fun InventoryScreenV3(vm: AppViewModel) {
                 }
             }
         }
+    }
+}
+
+private fun unitGrossFromStoredLineV3(lineGrossPence: Long, quantity: Int): Long {
+    if (quantity <= 1) return lineGrossPence
+    return (lineGrossPence + quantity / 2L) / quantity.toLong()
+}
+
+private fun isCancelledOrRefundedOrderV3(lines: List<PurchaseEntity>): Boolean {
+    if (lines.isEmpty() || purchaseOrderStatusV3(lines) in PendingReceiptStatusesV3) return false
+    return lines.any { line ->
+        line.cancelledQty > 0 ||
+            line.returnedQty > 0 ||
+            line.partialRefund ||
+            line.refundExpectedPence > 0 ||
+            line.refundReceivedPence > 0 ||
+            line.status in setOf("CANCELLED", "RETURNED", "REFUND_PENDING", "REFUND_RECEIVED")
     }
 }
 
