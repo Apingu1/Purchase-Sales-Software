@@ -217,12 +217,14 @@ private fun PurchasesScreenV3(vm: AppViewModel, nav: NavHostController) {
     val periodOrders = if (period == null) emptyList() else orders.filter { it.purchaseDateEpochDay in period!!.startEpochDay..period!!.endEpochDay }
     val rows = periodOrders.map { order -> order to allLines.filter { it.purchaseOrderId == order.id } }
     val pendingCount = rows.count { (_, lines) -> purchaseOrderStatusV3(lines) in PendingReceiptStatusesV3 }
+    val receivedCount = rows.count { (_, lines) -> purchaseOrderStatusV3(lines) == "RECEIVED" }
     val cancelledRefundedCount = rows.count { (_, lines) -> isCancelledOrRefundedOrderV3(lines) }
     val filtered = rows.filter { (order, lines) ->
         val status = purchaseOrderStatusV3(lines)
         val statusMatches = when (tab) {
             0 -> status in PendingReceiptStatusesV3
-            1 -> isCancelledOrRefundedOrderV3(lines)
+            1 -> status == "RECEIVED"
+            2 -> isCancelledOrRefundedOrderV3(lines)
             else -> true
         }
         val q = query.trim()
@@ -239,8 +241,9 @@ private fun PurchasesScreenV3(vm: AppViewModel, nav: NavHostController) {
             AccountingPeriodSelector(vm, Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
             ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) {
                 Tab(tab == 0, { tab = 0 }, text = { Text("Pending receipts") })
-                Tab(tab == 1, { tab = 1 }, text = { Text("Cancelled / refunded") })
-                Tab(tab == 2, { tab = 2 }, text = { Text("All") })
+                Tab(tab == 1, { tab = 1 }, text = { Text("Received") })
+                Tab(tab == 2, { tab = 2 }, text = { Text("Cancelled / refunded") })
+                Tab(tab == 3, { tab = 3 }, text = { Text("All") })
             }
             OutlinedTextField(
                 value = query,
@@ -254,7 +257,8 @@ private fun PurchasesScreenV3(vm: AppViewModel, nav: NavHostController) {
             Text(
                 when (tab) {
                     0 -> "Showing ${filtered.size} of $pendingCount pending receipt order${if (pendingCount == 1) "" else "s"}"
-                    1 -> "Showing ${filtered.size} of $cancelledRefundedCount cancelled/refunded order${if (cancelledRefundedCount == 1) "" else "s"}"
+                    1 -> "Showing ${filtered.size} of $receivedCount received order${if (receivedCount == 1) "" else "s"}"
+                    2 -> "Showing ${filtered.size} of $cancelledRefundedCount cancelled/refunded order${if (cancelledRefundedCount == 1) "" else "s"}"
                     else -> "Showing ${filtered.size} of ${rows.size} total order${if (rows.size == 1) "" else "s"}"
                 },
                 style = MaterialTheme.typography.bodySmall,
