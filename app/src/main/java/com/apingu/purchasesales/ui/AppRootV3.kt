@@ -276,6 +276,7 @@ private fun PurchasesScreenV3(vm: AppViewModel, nav: NavHostController) {
 private fun PurchaseOrderCardV3(order: PurchaseOrderEntity, lines: List<PurchaseEntity>, nav: NavHostController, vm: AppViewModel) {
     val status = purchaseOrderStatusV3(lines)
     val isPending = status in PendingReceiptStatusesV3
+    val canDuplicate = isPending || status == "RECEIVED"
     var menuExpanded by remember(order.id) { mutableStateOf(false) }
     val totalGross = lines.sumOf { it.grossPence }
     val totalQty = lines.sumOf { it.quantity }
@@ -296,7 +297,7 @@ private fun PurchaseOrderCardV3(order: PurchaseOrderEntity, lines: List<Purchase
                     Text(buildString { append(displayDate(order.purchaseDateEpochDay)); if (order.orderNumber.isNotBlank()) append(" • ${order.orderNumber}") }, style = MaterialTheme.typography.bodySmall)
                 }
                 AssistChip(onClick = {}, label = { Text(status.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }) })
-                if (isPending) {
+                if (canDuplicate) {
                     Box {
                         IconButton(onClick = { menuExpanded = true }) {
                             Icon(Icons.Default.MoreVert, contentDescription = "Purchase order actions")
