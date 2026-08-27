@@ -96,6 +96,7 @@ object TraceableInvoicePdf {
         }
         if (customer.email.isNotBlank()) { text("Email: ${customer.email}".take(75), 40f, billY, 9f); billY += 13f }
         if (customer.vatNumber.isNotBlank()) { text("VAT No: ${customer.vatNumber}", 40f, billY, 9f); billY += 13f }
+        if (customer.companyNumber.isNotBlank()) { text("Company No: ${customer.companyNumber}", 40f, billY, 9f); billY += 13f }
 
         var y = maxOf(285f, billY + 22f)
         paint.strokeWidth = 1f
@@ -112,7 +113,7 @@ object TraceableInvoicePdf {
             val requiredHeight = 22f + if (noteLines.isEmpty()) 0f else 18f + noteLines.size * 12f
             if (y + requiredHeight > 700f) y = startNewPage()
 
-            text(line.item.take(48), 40f, y, 9f)
+            text(line.item.take(48), 40f, y, 9f, true)
             text(line.quantity.toString(), 338f, y, 9f)
             text(formatMoney(line.unitGrossPence), 385f, y, 9f)
             text(formatMoney(line.lineGrossPence), 490f, y, 9f)
