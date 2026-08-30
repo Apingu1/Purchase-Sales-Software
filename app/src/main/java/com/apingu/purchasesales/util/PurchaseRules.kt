@@ -28,31 +28,50 @@ private fun isFullSupplierRefundComplete(purchase: PurchaseEntity): Boolean = wh
 }
 
 /**
+ * Older app versions could record a full supplier refund without also back-filling cancelledQty.
+ * If nothing was ever received and the full purchase value has been refunded, the purchase is
+ * financially void regardless of that missing legacy cancellation metadata.
+ */
+private fun isLegacyUnreceivedFullRefund(purchase: PurchaseEntity): Boolean =
+    !purchase.partialRefund &&
+        purchase.quantity > 0 &&
+        purchase.receivedQty <= 0 &&
+        isFullSupplierRefundComplete(purchase)
+
+/**
  * A true cancelled + refunded purchase line for accounting export. Partial price adjustments never
- * qualify. Kept separate from the dashboard rule because a cancelled order with money still owed
- * should remain visible in records/refund tracking even though it contributes zero input VAT.
+ * qualify. Legacy unreceived/full-refund records are included so old cancellations cannot reappear
+ * just because cancelledQty was not stored by an earlier APK.
  */
 fun isCancelledAndFullyRefundedPurchase(purchase: PurchaseEntity): Boolean =
-    isFullyCancelledPurchase(purchase) && isFullSupplierRefundComplete(purchase)
+    (isFullyCancelledPurchase(purchase) || isLegacyUnreceivedFullRefund(purchase)) &&
+        isFullSupplierRefundComplete(purchase)
 
 /**
  * Used for Dropbox document cleanup. An order line is financially/physically closed when every
  * unit was either cancelled before receipt or returned after receipt, and the supplier refund is
- * complete. This intentionally excludes partial monetary refunds where the item is retained.
+ * complete. Legacy unreceived/full-refund records are treated as closed too. This intentionally
+ * excludes partial monetary refunds where the item is retained.
  */
 private fun isClosedAndFullyRefundedPurchase(purchase: PurchaseEntity): Boolean =
     !purchase.partialRefund &&
         purchase.quantity > 0 &&
-        purchase.cancelledQty + purchase.returnedQty >= purchase.quantity &&
-        isFullSupplierRefundComplete(purchase)
+        isFullSupplierRefundComplete(purchase) &&
+        (
+            purchase.cancelledQty + purchase.returnedQty >= purchase.quantity ||
+                isLegacyUnreceivedFullRefund(purchase)
+            )
 
 /**
  * Finance/dashboard rule. A fully cancelled line is immediately excluded from purchase VAT even if
  * a supplier refund is still outstanding. A received purchase is excluded only when all units have
- * subsequently been closed/returned and the full supplier refund is complete.
+ * subsequently been closed/returned and the full supplier refund is complete. Legacy unreceived
+ * full refunds are also excluded.
  */
 fun isVoidedPurchaseForAccounting(purchase: PurchaseEntity): Boolean =
-    isFullyCancelledPurchase(purchase) || isClosedAndFullyRefundedPurchase(purchase)
+    isFullyCancelledPurchase(purchase) ||
+        isLegacyUnreceivedFullRefund(purchase) ||
+        isClosedAndFullyRefundedPurchase(purchase)
 
 /** A supplier invoice is removed only when every line on the order is fully closed/refunded. */
 fun isCancelledAndFullyRefundedOrder(lines: List<PurchaseEntity>): Boolean =

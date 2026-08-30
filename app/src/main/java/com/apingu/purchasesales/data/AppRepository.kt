@@ -3,9 +3,11 @@ package com.apingu.purchasesales.data
 import android.content.Context
 import android.net.Uri
 import androidx.room.withTransaction
+import com.apingu.purchasesales.sync.DropboxDeletionQueue
 import com.apingu.purchasesales.sync.DropboxSyncWorker
 import com.apingu.purchasesales.util.*
 import kotlinx.coroutines.flow.Flow
+import java.io.File
 import java.time.LocalDate
 
 /** Legacy single-line draft retained so the original V1 screen remains source-compatible. */
@@ -61,7 +63,15 @@ data class PurchaseOrderDraft(
 )
 
 data class SaleLineDraft(val item: String, val quantity: Int, val unitGrossPence: Long)
-data class SaleDraft(val id: Long = 0, val dateEpochDay: Long, val customerId: Long, val vatType: String, val notes: String, val lines: List<SaleLineDraft>)
+data class SaleDraft(
+    val id: Long = 0,
+    val dateEpochDay: Long,
+    val customerId: Long,
+    val vatType: String,
+    val notes: String,
+    val lines: List<SaleLineDraft>,
+    val manualInvoiceNo: String? = null
+)
 
 data class ExpenseDraft(
     val id: Long = 0,
@@ -403,53 +413,122 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         return id
     }
 
-    suspend fun saveSale(draft: SaleDraft): Long = db.withTransaction {
-        require(draft.customerId > 0) { "Select a customer" }
-        require(draft.lines.isNotEmpty()) { "Add at least one item" }
-        draft.lines.forEach { require(it.item.isNotBlank() && it.quantity > 0 && it.unitGrossPence >= 0) { "Each sale line needs an item, quantity and price" } }
-        if (draft.id > 0 && dao.countReturnsForSale(draft.id) > 0) error("This invoice has a customer return. Create a correcting/refund transaction rather than changing its stock lines.")
+    suspend fun saveSale(draft: SaleDraft): Long {
+        var oldDropboxInvoice: Pair<Long, String>? = null
+        var oldLocalPdf: String? = null
+        var savedInvoiceNo = ""
+        val saleId = db.withTransaction {
+            require(draft.customerId > 0) { "Select a customer" }
+            require(draft.lines.isNotEmpty()) { "Add at least one item" }
+            draft.lines.forEach { require(it.item.isNotBlank() && it.quantity > 0 && it.unitGrossPence >= 0) { "Each sale line needs an item, quantity and price" } }
+            if (draft.id > 0 && dao.countReturnsForSale(draft.id) > 0) error("This invoice has a customer return. Create a correcting/refund transaction rather than changing its stock lines.")
 
-        val customer = dao.getCustomer(draft.customerId) ?: error("Customer not found")
-        val existing = if (draft.id > 0) dao.getSale(draft.id) else null
-        if (existing != null) { dao.deleteAllocationsForSale(existing.id); dao.deleteSaleLinesForSale(existing.id) }
+            val customer = dao.getCustomer(draft.customerId) ?: error("Customer not found")
+            val existing = if (draft.id > 0) dao.getSale(draft.id) else null
+            val invoiceNo = when {
+                draft.manualInvoiceNo != null -> normalizeManualInvoiceNumber(draft.manualInvoiceNo)
+                existing != null && existing.customerId == draft.customerId && existing.saleDateEpochDay == draft.dateEpochDay -> existing.invoiceNo
+                else -> generateInvoiceNumber(customer, draft.dateEpochDay)
+            }
+            val sameAsExisting = existing?.invoiceNo?.equals(invoiceNo, ignoreCase = true) == true
+            val alreadyReserved = InvoiceNumberPreferences.wasInvoiceNumberUsed(context, invoiceNo)
+            require(
+                dao.getSales().none { it.id != draft.id && it.invoiceNo.equals(invoiceNo, ignoreCase = true) } &&
+                    (sameAsExisting || !alreadyReserved)
+            ) { "Invoice number $invoiceNo has already been used" }
+            savedInvoiceNo = invoiceNo
 
-        val lineBreakdowns = draft.lines.map { line -> line to breakdownFromGross(line.unitGrossPence * line.quantity, draft.vatType) }
-        val totalNet = lineBreakdowns.sumOf { it.second.netPence }
-        val totalVat = lineBreakdowns.sumOf { it.second.vatPence }
-        val totalGross = lineBreakdowns.sumOf { it.second.grossPence }
-        val totalReverse = lineBreakdowns.sumOf { it.second.reverseVatPence }
-        val invoiceNo = if (existing != null && existing.customerId == draft.customerId && existing.saleDateEpochDay == draft.dateEpochDay) existing.invoiceNo else generateInvoiceNumber(customer, draft.dateEpochDay)
-        var sale = SaleEntity(
-            id = draft.id, invoiceNo = invoiceNo, saleDateEpochDay = draft.dateEpochDay,
-            customerId = draft.customerId, vatType = draft.vatType, netPence = totalNet, vatPence = totalVat,
-            grossPence = totalGross, reverseVatPence = totalReverse, notes = draft.notes.trim(),
-            pdfPath = existing?.pdfPath, updatedAtMillis = System.currentTimeMillis()
-        )
-        val saleId = if (existing == null) dao.insertSale(sale) else { dao.updateSale(sale); sale.id }
-        sale = sale.copy(id = saleId)
+            if (existing != null && (existing.invoiceNo != invoiceNo || existing.saleDateEpochDay != draft.dateEpochDay)) {
+                oldDropboxInvoice = existing.saleDateEpochDay to existing.invoiceNo
+                if (existing.invoiceNo != invoiceNo) oldLocalPdf = existing.pdfPath
+            }
+            if (existing != null) { dao.deleteAllocationsForSale(existing.id); dao.deleteSaleLinesForSale(existing.id) }
 
-        val newLines = mutableListOf<SaleLineEntity>()
-        lineBreakdowns.forEach { (line, breakdown) ->
-            val lineEntity = SaleLineEntity(
-                saleId = saleId, item = line.item.trim(), quantity = line.quantity,
-                unitGrossPence = line.unitGrossPence, lineGrossPence = breakdown.grossPence,
-                lineNetPence = breakdown.netPence, lineVatPence = breakdown.vatPence
+            val lineBreakdowns = draft.lines.map { line -> line to breakdownFromGross(line.unitGrossPence * line.quantity, draft.vatType) }
+            val totalNet = lineBreakdowns.sumOf { it.second.netPence }
+            val totalVat = lineBreakdowns.sumOf { it.second.vatPence }
+            val totalGross = lineBreakdowns.sumOf { it.second.grossPence }
+            val totalReverse = lineBreakdowns.sumOf { it.second.reverseVatPence }
+            var sale = SaleEntity(
+                id = draft.id, invoiceNo = invoiceNo, saleDateEpochDay = draft.dateEpochDay,
+                customerId = draft.customerId, vatType = draft.vatType, netPence = totalNet, vatPence = totalVat,
+                grossPence = totalGross, reverseVatPence = totalReverse, notes = draft.notes.trim(),
+                pdfPath = existing?.pdfPath, updatedAtMillis = System.currentTimeMillis()
             )
-            val lineId = dao.insertSaleLine(lineEntity)
-            val savedLine = lineEntity.copy(id = lineId)
-            newLines += savedLine
-            allocateStock(savedLine)
+            val savedSaleId = if (existing == null) dao.insertSale(sale) else { dao.updateSale(sale); sale.id }
+            sale = sale.copy(id = savedSaleId)
+
+            val newLines = mutableListOf<SaleLineEntity>()
+            lineBreakdowns.forEach { (line, breakdown) ->
+                val lineEntity = SaleLineEntity(
+                    saleId = savedSaleId, item = line.item.trim(), quantity = line.quantity,
+                    unitGrossPence = line.unitGrossPence, lineGrossPence = breakdown.grossPence,
+                    lineNetPence = breakdown.netPence, lineVatPence = breakdown.vatPence
+                )
+                val lineId = dao.insertSaleLine(lineEntity)
+                val savedLine = lineEntity.copy(id = lineId)
+                newLines += savedLine
+                allocateStock(savedLine)
+            }
+            val business = dao.getBusiness() ?: BusinessEntity()
+            val pdfPath = InvoicePdf.create(context, business, customer, sale, newLines)
+            dao.updateSale(sale.copy(pdfPath = pdfPath))
+            savedSaleId
         }
-        val business = dao.getBusiness() ?: BusinessEntity()
-        val pdfPath = InvoicePdf.create(context, business, customer, sale, newLines)
-        dao.updateSale(sale.copy(pdfPath = pdfPath))
+
+        oldDropboxInvoice?.let { (day, invoiceNo) ->
+            InvoiceNumberPreferences.markInvoiceNumberUsed(context, invoiceNo)
+            DropboxDeletionQueue.enqueueSale(context, day, invoiceNo)
+        }
+        oldLocalPdf?.let { File(it).delete() }
+        InvoiceNumberPreferences.markInvoiceNumberUsed(context, savedInvoiceNo)
         enqueueSync()
-        saleId
+        return saleId
+    }
+
+    suspend fun deleteSale(saleId: Long) {
+        val sale = dao.getSale(saleId) ?: return
+        db.withTransaction {
+            val writableDb = db.openHelper.writableDatabase
+            writableDb.execSQL(
+                "DELETE FROM sale_return_allocations WHERE saleReturnId IN (SELECT id FROM sale_returns WHERE saleLineId IN (SELECT id FROM sale_lines WHERE saleId = ?))",
+                arrayOf(saleId)
+            )
+            writableDb.execSQL(
+                "DELETE FROM sale_returns WHERE saleLineId IN (SELECT id FROM sale_lines WHERE saleId = ?)",
+                arrayOf(saleId)
+            )
+            dao.deleteAllocationsForSale(saleId)
+            dao.deleteSaleLinesForSale(saleId)
+            writableDb.execSQL("DELETE FROM sales WHERE id = ?", arrayOf(saleId))
+        }
+        sale.pdfPath?.let { File(it).delete() }
+        InvoiceNumberPreferences.markInvoiceNumberUsed(context, sale.invoiceNo)
+        DropboxDeletionQueue.enqueueSale(context, sale.saleDateEpochDay, sale.invoiceNo)
+        enqueueSync()
+    }
+
+    private fun normalizeManualInvoiceNumber(raw: String): String {
+        val value = raw.trim()
+        require(value.isNotBlank()) { "Enter an invoice number" }
+        require(value.matches(Regex("[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}"))) {
+            "Invoice number can use letters, numbers, spaces, hyphens, underscores and dots only"
+        }
+        return value
     }
 
     private suspend fun generateInvoiceNumber(customer: CustomerEntity, day: Long): String {
-        val count = dao.countCustomerSalesOnDay(customer.id, day) + 1
-        return "${customer.invoiceCode.uppercase()}-${compactDate(day)}-${count.toString().padStart(2, '0')}"
+        val prefix = "${customer.invoiceCode.uppercase()}-${compactDate(day)}-"
+        val existing = dao.getSales()
+        var sequence = 1
+        while (sequence < 100_000) {
+            val candidate = "$prefix${sequence.toString().padStart(2, '0')}"
+            val inDatabase = existing.any { it.invoiceNo.equals(candidate, ignoreCase = true) }
+            val reserved = InvoiceNumberPreferences.wasInvoiceNumberUsed(context, candidate)
+            if (!inDatabase && !reserved) return candidate
+            sequence++
+        }
+        error("Unable to generate a unique invoice number")
     }
 
     private suspend fun allocateStock(line: SaleLineEntity) {

@@ -104,6 +104,25 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
         saleId
     }
 
+    fun deleteSale(value: SaleEntity, onSuccess: () -> Unit = {}) = action("Sales invoice deleted", onSuccess) {
+        repo.deleteSale(value.id)
+    }
+
+    fun exportSaleInvoice(saleId: Long, uri: Uri) = action("Sales invoice downloaded") {
+        var sale = dao.getSale(saleId) ?: error("Sales invoice not found")
+        var source = sale.pdfPath?.let(::File)
+        if (source == null || !source.exists()) {
+            refreshTraceableInvoice(saleId)
+            sale = dao.getSale(saleId) ?: error("Sales invoice not found")
+            source = sale.pdfPath?.let(::File)
+        }
+        val sourceFile = source?.takeIf { it.exists() } ?: error("Sales invoice PDF is not available")
+        context.contentResolver.openOutputStream(uri).use { out ->
+            requireNotNull(out) { "Unable to open download location" }
+            sourceFile.inputStream().use { it.copyTo(out) }
+        }
+    }
+
     private suspend fun refreshTraceableInvoice(saleId: Long) {
         val sale = dao.getSale(saleId) ?: return
         val customer = dao.getCustomer(sale.customerId) ?: return
@@ -138,7 +157,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
         val temp = File(context.cacheDir, "Business_Records_${safePeriodFileName(period.name)}.xlsx")
         XlsxExport.create(
             temp,
-            data.purchases.filter { it.purchaseDateEpochDay in period.startEpochDay..period.endEpochDay && !isCancelledAndFullyRefundedPurchase(it) },
+            data.purchases.filter { it.purchaseDateEpochDay in period.startEpochDay..period.endEpochDay && !isVoidedPurchaseForAccounting(it) },
             data.sales.filter { it.saleDateEpochDay in period.startEpochDay..period.endEpochDay },
             data.saleLines,
             data.saleReturns.filter { it.returnDateEpochDay in period.startEpochDay..period.endEpochDay },

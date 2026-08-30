@@ -1,5 +1,7 @@
 package com.apingu.purchasesales.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -12,6 +14,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -28,6 +31,13 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
     val customers by vm.customers.collectAsStateWithLifecycle()
     val lines by vm.saleLines.collectAsStateWithLifecycle()
     var returnSale by remember { mutableStateOf<SaleEntity?>(null) }
+    var deleteSale by remember { mutableStateOf<SaleEntity?>(null) }
+    var downloadSale by remember { mutableStateOf<SaleEntity?>(null) }
+    val invoiceDownloadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val selected = downloadSale
+        if (uri != null && selected != null) vm.exportSaleInvoice(selected.id, uri)
+        downloadSale = null
+    }
     val customerMap = customers.associateBy { it.id }
     val sales = if (period == null) emptyList() else allSales.filter { it.saleDateEpochDay in period!!.startEpochDay..period!!.endEpochDay }
 
@@ -78,9 +88,22 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
                                         Icon(Icons.Default.Edit, null)
                                         Text(" Edit")
                                     }
+                                    TextButton({
+                                        downloadSale = sale
+                                        invoiceDownloadLauncher.launch("${sale.invoiceNo}.pdf")
+                                    }) {
+                                        Icon(Icons.Default.Download, null)
+                                        Text(" Download PDF")
+                                    }
+                                }
+                                Row {
                                     TextButton({ returnSale = sale }) {
                                         Icon(Icons.Default.KeyboardReturn, null)
                                         Text(" Return/refund")
+                                    }
+                                    TextButton({ deleteSale = sale }) {
+                                        Icon(Icons.Default.DeleteOutline, null)
+                                        Text(" Delete invoice")
                                     }
                                 }
                             }
@@ -94,6 +117,22 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
     returnSale?.let { sale ->
         CustomerReturnDialog(vm, sale, lines.filter { it.saleId == sale.id }) { returnSale = null }
     }
+    deleteSale?.let { sale ->
+        AlertDialog(
+            onDismissRequest = { deleteSale = null },
+            title = { Text("Delete ${sale.invoiceNo}?") },
+            text = {
+                Text("This permanently removes the sales invoice, its sale lines and any recorded customer returns. Stock allocations are removed so inventory is restored as though this sale had not been recorded. If Dropbox sync is used, the cloud PDF is queued for removal too.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteSale(sale)
+                    deleteSale = null
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton({ deleteSale = null }) { Text("Cancel") } }
+        )
+    }
 }
 
 private data class SaleLineForm(var item: String, var qty: String, var unitGross: String)
@@ -101,6 +140,8 @@ private data class SaleLineForm(var item: String, var qty: String, var unitGross
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SaleEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
+    val context = LocalContext.current
+    val autoInvoiceNumber = remember { InvoiceNumberPreferences.isAutoEnabled(context) }
     val sales by vm.sales.collectAsStateWithLifecycle()
     val allLines by vm.saleLines.collectAsStateWithLifecycle()
     val customers by vm.customers.collectAsStateWithLifecycle()
@@ -112,6 +153,7 @@ fun SaleEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
     }
 
     val existingLines = allLines.filter { it.saleId == id }
+    var invoiceNo by remember(sale?.id, autoInvoiceNumber) { mutableStateOf(sale?.invoiceNo.orEmpty()) }
     var date by remember(sale?.id) { mutableStateOf(editDate(sale?.saleDateEpochDay ?: epochDayToday())) }
     var customerId by remember(sale?.id, customers.size) { mutableLongStateOf(sale?.customerId ?: customers.firstOrNull()?.id ?: 0L) }
     var vatType by remember(sale?.id) { mutableStateOf(sale?.vatType ?: VatTypes.STANDARD) }
@@ -142,6 +184,15 @@ fun SaleEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
                 }
             }
 
+            if (autoInvoiceNumber) {
+                Text(
+                    if (sale == null) "Invoice number will be generated automatically when you save." else "Invoice number: ${sale.invoiceNo}",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            } else {
+                FormField("Invoice number", invoiceNo, { invoiceNo = it.take(64) })
+                Text("Manual invoice numbering is enabled in Business Details. Invoice numbers must be unique.", style = MaterialTheme.typography.bodySmall)
+            }
             FormField("Sale date (DD/MM/YYYY)", date, { date = it })
             CustomerSelector(customers, customerId) { customerId = it }
             VatSelector(vatType) { vatType = it }
@@ -201,18 +252,19 @@ fun SaleEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
                 {
                     vm.saveSale(
                         SaleDraft(
-                            id,
-                            parseDateOrToday(date),
-                            customerId,
-                            vatType,
-                            notes,
-                            forms.map {
+                            id = id,
+                            dateEpochDay = parseDateOrToday(date),
+                            customerId = customerId,
+                            vatType = vatType,
+                            notes = notes,
+                            lines = forms.map {
                                 SaleLineDraft(
                                     it.item,
                                     it.qty.toIntOrNull() ?: 0,
                                     runCatching { moneyToPence(it.unitGross) }.getOrDefault(0)
                                 )
-                            }
+                            },
+                            manualInvoiceNo = if (autoInvoiceNumber) null else invoiceNo
                         )
                     ) { nav.popBackStack() }
                 },

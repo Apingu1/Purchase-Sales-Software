@@ -38,6 +38,24 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
             val inv = buildInventory(purchases, allocations, returnAllocations)
             val root = "/" + business.dropboxRoot.trim().trim('/').ifBlank { "Purchase-Sales-Software" }
 
+            // Apply queued sales-invoice deletions before uploading the current state. This removes
+            // stale Dropbox PDFs after local invoice deletion, renumbering or accounting-period moves.
+            val pendingSaleDeletes = DropboxDeletionQueue.pendingSales(applicationContext)
+            val completedSaleDeletes = mutableListOf<PendingSaleInvoiceDeletion>()
+            pendingSaleDeletes.forEach { pendingDelete ->
+                val period = periods.firstOrNull {
+                    pendingDelete.saleDateEpochDay in it.startEpochDay..it.endEpochDay
+                }
+                if (period != null) {
+                    DropboxApi.deleteIfExists(
+                        token,
+                        "$root/Accounting Periods/${safePeriod(period)}/Sales/Invoices/${pendingDelete.invoiceNo}.pdf"
+                    )
+                    completedSaleDeletes += pendingDelete
+                }
+            }
+            DropboxDeletionQueue.removeSales(applicationContext, completedSaleDeletes)
+
             // Recovery and inventory remain global/all-time by design.
             val recoveryDir = File(applicationContext.filesDir, "recovery").apply { mkdirs() }
             val allPurchases = File(recoveryDir, "PURCHASES.txt").apply { writeText(purchasesDump(purchases)) }
@@ -72,7 +90,7 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
                 val xlsx = File(exportDir, "Business_Records_${safePeriod(period)}.xlsx")
                 XlsxExport.create(
                     xlsx,
-                    periodPurchases.filter { !isCancelledAndFullyRefundedPurchase(it) },
+                    periodPurchases.filterNot(::isVoidedPurchaseForAccounting),
                     periodSales,
                     saleLines,
                     periodReturns,
