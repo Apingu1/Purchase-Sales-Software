@@ -135,7 +135,7 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
     }
 }
 
-private data class SaleLineForm(var item: String, var qty: String, var unitGross: String)
+private data class SaleLineForm(var item: String, var qty: String, var unitNet: String)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -161,8 +161,9 @@ fun SaleEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
     val forms = remember(sale?.id, existingLines.size) {
         mutableStateListOf<SaleLineForm>().apply {
             if (existingLines.isNotEmpty()) {
-                existingLines.forEach {
-                    add(SaleLineForm(it.item, it.quantity.toString(), formatMoneyPlain(it.unitGrossPence)))
+                existingLines.forEach { line ->
+                    val existingUnitNet = breakdownFromGross(line.unitGrossPence, sale?.vatType ?: VatTypes.STANDARD).netPence
+                    add(SaleLineForm(line.item, line.quantity.toString(), formatMoneyPlain(existingUnitNet)))
                 }
             } else {
                 add(SaleLineForm(inventory.firstOrNull { it.available > 0 }?.item.orEmpty(), "1", ""))
@@ -196,6 +197,14 @@ fun SaleEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
             FormField("Sale date (DD/MM/YYYY)", date, { date = it })
             CustomerSelector(customers, customerId) { customerId = it }
             VatSelector(vatType) { vatType = it }
+            Text(
+                when (vatType) {
+                    VatTypes.STANDARD -> "Enter the Unit Net selling price. VAT at 20% is calculated automatically."
+                    VatTypes.REVERSE -> "Enter the Unit Net selling price. Customer VAT charged is £0.00; reverse VAT is calculated notionally for accounting."
+                    else -> "Enter the Unit Net selling price. No VAT is added."
+                },
+                style = MaterialTheme.typography.bodySmall
+            )
 
             HorizontalDivider()
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -211,9 +220,10 @@ fun SaleEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
 
             forms.forEachIndexed { index, form ->
                 SaleLineCard(
-                    index,
-                    form,
-                    inventory,
+                    index = index,
+                    form = form,
+                    inventory = inventory,
+                    vatType = vatType,
                     onChange = { updated -> forms[index] = updated },
                     onDelete = { if (forms.size > 1) forms.removeAt(index) },
                     canDelete = forms.size > 1
@@ -231,18 +241,23 @@ fun SaleEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
                 Text("Add another item")
             }
 
-            val preview = forms.sumOf {
-                runCatching { moneyToPence(it.unitGross) * (it.qty.toIntOrNull() ?: 0) }.getOrDefault(0)
+            val previewBreakdowns = forms.map { form ->
+                val unitNet = runCatching { moneyToPence(form.unitNet) }.getOrDefault(0)
+                val quantity = form.qty.toIntOrNull() ?: 0
+                breakdownFromNet(unitNet * quantity, vatType)
             }
             val totalQty = forms.sumOf { it.qty.toIntOrNull() ?: 0 }
-            val breakdown = breakdownFromGross(preview, vatType)
+            val totalNet = previewBreakdowns.sumOf { it.netPence }
+            val totalVat = previewBreakdowns.sumOf { it.vatPence }
+            val totalGross = previewBreakdowns.sumOf { it.grossPence }
+            val totalReverse = previewBreakdowns.sumOf { it.reverseVatPence }
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text("Invoice total ${formatMoney(breakdown.grossPence)}", fontWeight = FontWeight.Bold)
+                    Text("Invoice total ${formatMoney(totalGross)}", fontWeight = FontWeight.Bold)
                     Text("${forms.size} item line${if (forms.size == 1) "" else "s"} • $totalQty total units")
-                    Text("Net ${formatMoney(breakdown.netPence)} • VAT ${formatMoney(breakdown.vatPence)}", style = MaterialTheme.typography.bodySmall)
+                    Text("Net ${formatMoney(totalNet)} • VAT ${formatMoney(totalVat)}", style = MaterialTheme.typography.bodySmall)
                     if (vatType == VatTypes.REVERSE) {
-                        Text("Reverse VAT invoice • VAT charged to customer £0.00", style = MaterialTheme.typography.bodySmall)
+                        Text("Reverse VAT notional ${formatMoney(totalReverse)} • VAT charged to customer £0.00", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
@@ -261,7 +276,7 @@ fun SaleEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
                                 SaleLineDraft(
                                     it.item,
                                     it.qty.toIntOrNull() ?: 0,
-                                    runCatching { moneyToPence(it.unitGross) }.getOrDefault(0)
+                                    runCatching { moneyToPence(it.unitNet) }.getOrDefault(0)
                                 )
                             },
                             manualInvoiceNo = if (autoInvoiceNumber) null else invoiceNo
@@ -284,21 +299,22 @@ private fun SaleLineCard(
     index: Int,
     form: SaleLineForm,
     inventory: List<InventoryRow>,
+    vatType: String,
     onChange: (SaleLineForm) -> Unit,
     onDelete: () -> Unit,
     canDelete: Boolean
 ) {
     var menu by remember { mutableStateOf(false) }
     val quantity = form.qty.toIntOrNull() ?: 0
-    val unitGross = runCatching { moneyToPence(form.unitGross) }.getOrDefault(0)
-    val lineGross = quantity * unitGross
+    val unitNet = runCatching { moneyToPence(form.unitNet) }.getOrDefault(0)
+    val lineBreakdown = breakdownFromNet(quantity * unitNet, vatType)
     val selectedInventory = inventory.firstOrNull { it.item.trim().equals(form.item.trim(), ignoreCase = true) }
 
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text("Item ${index + 1}", fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                if (lineGross > 0) Text(formatMoney(lineGross), fontWeight = FontWeight.SemiBold)
+                if (lineBreakdown.netPence > 0) Text("Net ${formatMoney(lineBreakdown.netPence)}", fontWeight = FontWeight.SemiBold)
                 if (canDelete) {
                     IconButton(onDelete) { Icon(Icons.Default.DeleteOutline, "Remove") }
                 }
@@ -339,9 +355,9 @@ private fun SaleLineCard(
                     singleLine = true
                 )
                 OutlinedTextField(
-                    form.unitGross,
-                    { onChange(form.copy(unitGross = it)) },
-                    label = { Text("Unit gross £") },
+                    form.unitNet,
+                    { onChange(form.copy(unitNet = it)) },
+                    label = { Text("Unit net £") },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                     modifier = Modifier.weight(2f),
                     singleLine = true
@@ -354,8 +370,18 @@ private fun SaleLineCard(
                     color = MaterialTheme.colorScheme.error
                 )
             }
-            if (lineGross > 0) {
-                Text("Line total ${formatMoney(lineGross)}", style = MaterialTheme.typography.bodySmall)
+            if (lineBreakdown.netPence > 0) {
+                when (vatType) {
+                    VatTypes.STANDARD -> Text(
+                        "Line net ${formatMoney(lineBreakdown.netPence)} • VAT ${formatMoney(lineBreakdown.vatPence)} • Gross ${formatMoney(lineBreakdown.grossPence)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    VatTypes.REVERSE -> Text(
+                        "Line net ${formatMoney(lineBreakdown.netPence)} • VAT charged £0.00 • Reverse VAT notional ${formatMoney(lineBreakdown.reverseVatPence)}",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    else -> Text("Line net ${formatMoney(lineBreakdown.netPence)} • No VAT", style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }

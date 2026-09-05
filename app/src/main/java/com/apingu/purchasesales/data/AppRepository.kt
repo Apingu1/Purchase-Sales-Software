@@ -62,7 +62,7 @@ data class PurchaseOrderDraft(
     val existingInvoicePath: String? = null
 )
 
-data class SaleLineDraft(val item: String, val quantity: Int, val unitGrossPence: Long)
+data class SaleLineDraft(val item: String, val quantity: Int, val unitNetPence: Long)
 data class SaleDraft(
     val id: Long = 0,
     val dateEpochDay: Long,
@@ -420,7 +420,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val saleId = db.withTransaction {
             require(draft.customerId > 0) { "Select a customer" }
             require(draft.lines.isNotEmpty()) { "Add at least one item" }
-            draft.lines.forEach { require(it.item.isNotBlank() && it.quantity > 0 && it.unitGrossPence >= 0) { "Each sale line needs an item, quantity and price" } }
+            draft.lines.forEach { require(it.item.isNotBlank() && it.quantity > 0 && it.unitNetPence >= 0) { "Each sale line needs an item, quantity and net price" } }
             if (draft.id > 0 && dao.countReturnsForSale(draft.id) > 0) error("This invoice has a customer return. Create a correcting/refund transaction rather than changing its stock lines.")
 
             val customer = dao.getCustomer(draft.customerId) ?: error("Customer not found")
@@ -444,7 +444,9 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             }
             if (existing != null) { dao.deleteAllocationsForSale(existing.id); dao.deleteSaleLinesForSale(existing.id) }
 
-            val lineBreakdowns = draft.lines.map { line -> line to breakdownFromGross(line.unitGrossPence * line.quantity, draft.vatType) }
+            val lineBreakdowns = draft.lines.map { line ->
+                line to breakdownFromNet(line.unitNetPence * line.quantity, draft.vatType)
+            }
             val totalNet = lineBreakdowns.sumOf { it.second.netPence }
             val totalVat = lineBreakdowns.sumOf { it.second.vatPence }
             val totalGross = lineBreakdowns.sumOf { it.second.grossPence }
@@ -460,9 +462,10 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
 
             val newLines = mutableListOf<SaleLineEntity>()
             lineBreakdowns.forEach { (line, breakdown) ->
+                val unitGross = breakdownFromNet(line.unitNetPence, draft.vatType).grossPence
                 val lineEntity = SaleLineEntity(
                     saleId = savedSaleId, item = line.item.trim(), quantity = line.quantity,
-                    unitGrossPence = line.unitGrossPence, lineGrossPence = breakdown.grossPence,
+                    unitGrossPence = unitGross, lineGrossPence = breakdown.grossPence,
                     lineNetPence = breakdown.netPence, lineVatPence = breakdown.vatPence
                 )
                 val lineId = dao.insertSaleLine(lineEntity)
@@ -559,7 +562,17 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val sale = dao.getSale(line.saleId) ?: error("Sale not found")
         val existingReturns = dao.getSaleReturns().filter { it.saleLineId == saleLineId }.sumOf { it.quantity }
         require(quantity > 0 && existingReturns + quantity <= line.quantity) { "Return quantity exceeds quantity sold" }
-        val breakdown = breakdownFromGross(line.unitGrossPence * quantity, sale.vatType)
+
+        // New net-priced lines have lineNet = per-unit net × quantity. Use that exact net basis for
+        // refunds. If an older historical line does not match that pattern, retain the legacy gross
+        // calculation so existing invoices/returns continue to behave as they did before this update.
+        val inferredUnitNet = breakdownFromGross(line.unitGrossPence, sale.vatType).netPence
+        val breakdown = if (inferredUnitNet * line.quantity == line.lineNetPence) {
+            breakdownFromNet(inferredUnitNet * quantity, sale.vatType)
+        } else {
+            breakdownFromGross(line.unitGrossPence * quantity, sale.vatType)
+        }
+
         val returnId = dao.insertSaleReturn(SaleReturnEntity(
             saleLineId = saleLineId, returnDateEpochDay = day, quantity = quantity,
             refundGrossPence = breakdown.grossPence, refundNetPence = breakdown.netPence,

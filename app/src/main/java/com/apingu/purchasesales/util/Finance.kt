@@ -34,6 +34,23 @@ fun breakdownFromGross(grossPence: Long, vatType: String): VatBreakdown = when (
     else -> VatBreakdown(grossPence, 0, grossPence, 0)
 }
 
+/**
+ * Sales-side VAT calculation when the user enters a NET selling price.
+ * Standard VAT adds 20% to net; reverse-charge and no-VAT sales charge the customer £0 VAT.
+ * Reverse-charge VAT is still calculated notionally for accounting/reporting purposes.
+ */
+fun breakdownFromNet(netPence: Long, vatType: String): VatBreakdown = when (vatType) {
+    VatTypes.STANDARD -> {
+        val vat = BigDecimal(netPence).multiply(BigDecimal("0.20")).setScale(0, RoundingMode.HALF_UP).longValueExact()
+        VatBreakdown(netPence, vat, netPence + vat, 0)
+    }
+    VatTypes.REVERSE -> {
+        val reverse = BigDecimal(netPence).multiply(BigDecimal("0.20")).setScale(0, RoundingMode.HALF_UP).longValueExact()
+        VatBreakdown(netPence, 0, netPence, reverse)
+    }
+    else -> VatBreakdown(netPence, 0, netPence, 0)
+}
+
 fun moneyToPence(text: String): Long {
     val cleaned = text.trim().replace("£", "").replace(",", "")
     if (cleaned.isBlank()) return 0

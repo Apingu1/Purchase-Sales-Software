@@ -103,20 +103,22 @@ object TraceableInvoicePdf {
         canvas.drawLine(40f, y, 555f, y, paint); y += 18f
         text("Item", 40f, y, 9f, true)
         text("Qty", 330f, y, 9f, true)
-        text("Unit Gross", 385f, y, 9f, true)
-        text("Gross", 490f, y, 9f, true)
+        text("Unit Net", 385f, y, 9f, true)
+        text("Total Net", 490f, y, 9f, true)
         y += 9f
         canvas.drawLine(40f, y, 555f, y, paint); y += 20f
 
-        lines.forEach { line ->
+        lines.forEachIndexed { index, line ->
             val noteLines = sourceNotes[line.id].orEmpty().let { if (it.isBlank()) emptyList() else wrap(it, 82) }
-            val requiredHeight = 22f + if (noteLines.isEmpty()) 0f else 18f + noteLines.size * 12f
+            val separatorHeight = if (index < lines.lastIndex) 14f else 0f
+            val requiredHeight = 22f + if (noteLines.isEmpty()) 0f else 18f + noteLines.size * 12f + separatorHeight
             if (y + requiredHeight > 700f) y = startNewPage()
 
+            val unitNet = breakdownFromGross(line.unitGrossPence, sale.vatType).netPence
             text(line.item.take(48), 40f, y, 9f, true)
             text(line.quantity.toString(), 338f, y, 9f)
-            text(formatMoney(line.unitGrossPence), 385f, y, 9f)
-            text(formatMoney(line.lineGrossPence), 490f, y, 9f)
+            text(formatMoney(unitNet), 385f, y, 9f)
+            text(formatMoney(line.lineNetPence), 490f, y, 9f)
             y += 18f
 
             if (noteLines.isNotEmpty()) {
@@ -127,7 +129,14 @@ object TraceableInvoicePdf {
                     y += 12f
                 }
             }
-            y += 5f
+
+            if (index < lines.lastIndex) {
+                y += 4f
+                canvas.drawLine(40f, y, 555f, y, paint)
+                y += 10f
+            } else {
+                y += 5f
+            }
         }
 
         if (y > 650f) y = startNewPage()
@@ -137,8 +146,15 @@ object TraceableInvoicePdf {
         text("VAT", 390f, y, 10f); text(formatMoney(sale.vatPence), 490f, y, 10f, true); y += 18f
         text("TOTAL", 390f, y, 12f, true); text(formatMoney(sale.grossPence), 490f, y, 12f, true); y += 26f
 
-        if (sale.vatType == VatTypes.NO_VAT) {
-            text("No VAT charged on this invoice.", 40f, y, 9f)
+        when (sale.vatType) {
+            VatTypes.REVERSE -> {
+                paint.color = android.graphics.Color.RED
+                text("Reverse charge applies - customer to account for VAT. VAT charged: £0.00", 40f, y, 9f, true)
+                y += 13f
+                text("Reverse VAT (notional): ${formatMoney(sale.reverseVatPence)}", 40f, y, 9f, true)
+                paint.color = android.graphics.Color.BLACK
+            }
+            VatTypes.NO_VAT -> text("No VAT charged on this invoice.", 40f, y, 9f)
         }
 
         y += 22f

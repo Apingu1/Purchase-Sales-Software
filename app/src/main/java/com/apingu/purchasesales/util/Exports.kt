@@ -122,17 +122,27 @@ object InvoicePdf {
         var y = maxOf(285f, billY + 22f)
         paint.strokeWidth = 1f
         canvas.drawLine(40f, y, 555f, y, paint); y += 18f
-        text("Item", 40f, y, 9f, true); text("Qty", 330f, y, 9f, true); text("Unit Gross", 385f, y, 9f, true); text("Gross", 490f, y, 9f, true)
+        text("Item", 40f, y, 9f, true)
+        text("Qty", 330f, y, 9f, true)
+        text("Unit Net", 385f, y, 9f, true)
+        text("Total Net", 490f, y, 9f, true)
         y += 9f
         canvas.drawLine(40f, y, 555f, y, paint); y += 20f
 
-        lines.forEach { line ->
-            if (y > 710f) y = newPage()
+        lines.forEachIndexed { index, line ->
+            if (y > 690f) y = newPage()
+            val unitNet = breakdownFromGross(line.unitGrossPence, sale.vatType).netPence
             text(line.item.take(48), 40f, y, 9f)
             text(line.quantity.toString(), 338f, y, 9f)
-            text(formatMoney(line.unitGrossPence), 385f, y, 9f)
-            text(formatMoney(line.lineGrossPence), 490f, y, 9f)
-            y += 20f
+            text(formatMoney(unitNet), 385f, y, 9f)
+            text(formatMoney(line.lineNetPence), 490f, y, 9f)
+            y += 13f
+            if (index < lines.lastIndex) {
+                canvas.drawLine(40f, y, 555f, y, paint)
+                y += 14f
+            } else {
+                y += 7f
+            }
         }
 
         if (y > 650f) y = newPage()
@@ -146,6 +156,8 @@ object InvoicePdf {
             VatTypes.REVERSE -> {
                 paint.color = android.graphics.Color.RED
                 text("Reverse charge applies - customer to account for VAT. VAT charged: £0.00", 40f, y, 9f, true)
+                y += 13f
+                text("Reverse VAT (notional): ${formatMoney(sale.reverseVatPence)}", 40f, y, 9f, true)
                 paint.color = android.graphics.Color.BLACK
             }
             VatTypes.NO_VAT -> text("No VAT charged on this invoice.", 40f, y, 9f)
@@ -367,7 +379,7 @@ object XlsxExport {
     private fun coreProperties(): String {
         val now = Instant.now().toString()
         return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>Purchase &amp; Sales Software</dc:creator><cp:lastModifiedBy>Purchase &amp; Sales Software</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">$now</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">$now</dcterms:modified></cp:coreProperties>"""
+<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/terms/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"><dc:creator>Purchase &amp; Sales Software</dc:creator><cp:lastModifiedBy>Purchase &amp; Sales Software</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">$now</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">$now</dcterms:modified></cp:coreProperties>"""
     }
 
     private fun validatePackage(target: File) {
