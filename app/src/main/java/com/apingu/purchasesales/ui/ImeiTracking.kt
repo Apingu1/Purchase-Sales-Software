@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.weight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
@@ -187,7 +186,7 @@ fun ImeiSelectionOverlay() {
                                         selected = selected + (group.key to updated)
                                     }
                                 )
-                                Text(candidate.identifier, modifier = Modifier.weight(1f))
+                                Text(candidate.identifier)
                             }
                         }
                         Text(
