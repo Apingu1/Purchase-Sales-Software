@@ -59,6 +59,8 @@ fun PurchaseSalesHost(app: PurchaseSalesApplication) {
                 .consumeWindowInsets(WindowInsets.systemBars)
         ) {
             PurchaseSalesRootV3()
+            ImeiSelectionOverlay()
+            WhatsNewNotice()
         }
     }
 }
