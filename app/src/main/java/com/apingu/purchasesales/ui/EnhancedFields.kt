@@ -86,6 +86,37 @@ fun FormField(label: String, value: String, onValueChange: (String) -> Unit) {
     }
 }
 
+/**
+ * More-specific overload for calls that only override singleLine. This keeps the existing single
+ * IMEI/serial textbox but explains the new per-line identifier behaviour directly beside it.
+ */
+@Composable
+fun FormField(label: String, value: String, onValueChange: (String) -> Unit, singleLine: Boolean) {
+    val isIdentifierField = label.contains("IMEI", ignoreCase = true) || label.contains("serial number", ignoreCase = true)
+    if (isIdentifierField) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label) },
+            supportingText = {
+                Text("For multiple units, enter one IMEI / serial per line. The app tracks each line as an individual device identifier.")
+            },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = singleLine,
+            minLines = if (singleLine) 1 else 3
+        )
+    } else {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            label = { Text(label) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = singleLine,
+            minLines = if (singleLine) 1 else 2
+        )
+    }
+}
+
 private fun isDateFieldLabel(label: String): Boolean {
     val normalized = label.lowercase()
     return normalized == "date" || normalized.contains(" date") || normalized.startsWith("date") ||
