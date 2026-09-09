@@ -97,15 +97,190 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     fun savePurchase(value: PurchaseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) = action("Purchase saved", onSuccess) { repo.savePurchase(value, attachmentUri) }
     fun markReceivedAll(value: PurchaseEntity) = action("Purchase received") { repo.markReceivedAll(value) }
 
-    fun saveSale(value: SaleDraft, onSuccess: () -> Unit) = action("Invoice generated", onSuccess) {
-        val saleId = repo.saveSale(value)
-        refreshTraceableInvoice(saleId)
-        repo.enqueueSync()
-        saleId
+    fun saveSale(value: SaleDraft, onSuccess: () -> Unit) {
+        viewModelScope.launch {
+            runCatching { prepareImeiSelectionGroups(value) }
+                .onSuccess { groups ->
+                    val choiceGroups = groups.filter { it.requiredQuantity < it.totalAvailableQuantity }
+                    if (choiceGroups.isEmpty()) {
+                        val automatic = groups.associate { group ->
+                            group.key to group.candidates.take(group.requiredQuantity)
+                        }
+                        completeSale(value, automatic, onSuccess)
+                    } else {
+                        ImeiSelectionCoordinator.show(
+                            ImeiSelectionRequest(groups = choiceGroups) { selectedIds ->
+                                val resolved = groups.associate { group ->
+                                    val identifiers = if (group.requiredQuantity < group.totalAvailableQuantity) {
+                                        selectedIds[group.key].orEmpty()
+                                    } else {
+                                        group.candidates.take(group.requiredQuantity).map { it.identifier }.toSet()
+                                    }
+                                    group.key to group.candidates.filter { it.identifier in identifiers }
+                                }
+                                completeSale(value, resolved, onSuccess)
+                            }
+                        )
+                    }
+                }
+                .onFailure { _message.value = it.message ?: "Something went wrong" }
+        }
     }
 
+    private fun completeSale(
+        value: SaleDraft,
+        selectedByItem: Map<String, List<ImeiCandidate>>,
+        onSuccess: () -> Unit
+    ) {
+        viewModelScope.launch {
+            runCatching {
+                val oldLineIds = if (value.id > 0) dao.getSaleLinesForSale(value.id).map { it.id } else emptyList()
+                val saleId = repo.saveSale(value)
+                oldLineIds.forEach { ImeiAssignmentStore.clear(context, it) }
+                applyImeiSelections(saleId, selectedByItem)
+                refreshTraceableInvoice(saleId)
+                repo.enqueueSync()
+                saleId
+            }.onSuccess {
+                _message.value = "Invoice generated"
+                onSuccess()
+            }.onFailure {
+                _message.value = it.message ?: "Something went wrong"
+            }
+        }
+    }
+
+    private suspend fun prepareImeiSelectionGroups(value: SaleDraft): List<ImeiSelectionGroup> {
+        val allPurchases = dao.getPurchases()
+        val allOrders = dao.getPurchaseOrders().associateBy { it.id }
+        val allAllocations = dao.getSaleAllocations()
+        val allReturnAllocations = dao.getSaleReturnAllocations()
+        val allReturns = dao.getSaleReturns()
+        val currentLines = if (value.id > 0) dao.getSaleLinesForSale(value.id) else emptyList()
+        val currentLineIds = currentLines.map { it.id }.toSet()
+
+        val returnedByAllocation = allReturnAllocations.groupBy { it.saleAllocationId }
+            .mapValues { (_, rows) -> rows.sumOf { it.quantity } }
+        val allocationsOutsideCurrent = allAllocations.filter { it.saleLineId !in currentLineIds }
+        val netSoldByPurchase = allocationsOutsideCurrent.groupBy { it.purchaseId }.mapValues { (_, rows) ->
+            rows.sumOf { allocation ->
+                (allocation.quantity - (returnedByAllocation[allocation.id] ?: 0)).coerceAtLeast(0)
+            }
+        }
+
+        val restockedByLine = allReturns.filter { it.restock && it.saleLineId !in currentLineIds }
+            .groupBy { it.saleLineId }
+            .mapValues { (_, rows) -> rows.sumOf { it.quantity } }
+
+        val exactUsedIdentifiers = mutableSetOf<String>()
+        dao.getSaleLines().filter { it.id !in currentLineIds }.forEach { line ->
+            val assigned = ImeiAssignmentStore.get(context, line.id)
+            val restocked = (restockedByLine[line.id] ?: 0).coerceAtMost(assigned.size)
+            exactUsedIdentifiers += if (restocked > 0) assigned.dropLast(restocked) else assigned
+        }
+
+        val candidatesByItem = mutableMapOf<String, MutableList<ImeiCandidate>>()
+        val availableByItem = mutableMapOf<String, Int>()
+
+        allPurchases.forEach { purchase ->
+            if (purchase.receivedQty <= 0) return@forEach
+            val key = normalizeItemKey(purchase.item)
+            val netSold = netSoldByPurchase[purchase.id] ?: 0
+            val stockCapacity = (purchase.receivedQty - purchase.returnedQty - netSold).coerceAtLeast(0)
+            if (stockCapacity <= 0) return@forEach
+            availableByItem[key] = (availableByItem[key] ?: 0) + stockCapacity
+
+            val orderNote = allOrders[purchase.purchaseOrderId]?.notes.orEmpty()
+            val identifiers = trackedIdentifiers(purchase, orderNote)
+            if (identifiers.isEmpty()) return@forEach
+
+            val exactUsedHere = identifiers.filter { it in exactUsedIdentifiers }.toSet()
+            val legacyConsumedCount = (netSold - exactUsedHere.size).coerceAtLeast(0)
+            val legacyReserved = identifiers.filter { it !in exactUsedHere }.take(legacyConsumedCount).toSet()
+            val availableIdentifiers = identifiers
+                .filter { it !in exactUsedHere && it !in legacyReserved }
+                .take(stockCapacity)
+
+            availableIdentifiers.forEach { identifier ->
+                candidatesByItem.getOrPut(key) { mutableListOf() } += ImeiCandidate(identifier, purchase.id)
+            }
+        }
+
+        val requestedByItem = value.lines.groupBy { normalizeItemKey(it.item) }
+            .mapValues { (_, rows) -> rows.sumOf { it.quantity.coerceAtLeast(0) } }
+
+        val previousSelectionsByItem = mutableMapOf<String, MutableSet<String>>()
+        currentLines.forEach { line ->
+            previousSelectionsByItem.getOrPut(normalizeItemKey(line.item)) { mutableSetOf() }
+                .addAll(ImeiAssignmentStore.get(context, line.id))
+        }
+
+        return requestedByItem.mapNotNull { (key, requested) ->
+            if (requested <= 0) return@mapNotNull null
+            val available = availableByItem[key] ?: 0
+            val candidates = candidatesByItem[key].orEmpty().distinctBy { it.identifier }
+            if (available <= 0 || candidates.size < requested) return@mapNotNull null
+            val itemName = value.lines.firstOrNull { normalizeItemKey(it.item) == key }?.item?.trim().orEmpty()
+            ImeiSelectionGroup(
+                key = key,
+                item = itemName,
+                requiredQuantity = requested,
+                totalAvailableQuantity = available,
+                candidates = candidates,
+                preselected = previousSelectionsByItem[key].orEmpty().filter { previous -> candidates.any { it.identifier == previous } }.toSet()
+            )
+        }
+    }
+
+    private suspend fun applyImeiSelections(
+        saleId: Long,
+        selectedByItem: Map<String, List<ImeiCandidate>>
+    ) {
+        if (selectedByItem.isEmpty()) return
+        val lines = dao.getSaleLinesForSale(saleId)
+        val purchaseMap = dao.getPurchases().associateBy { it.id }
+        val existingAllocations = dao.getAllocationsForSale(saleId)
+        val queues = selectedByItem.mapValues { (_, values) -> values.toMutableList() }.toMutableMap()
+        val replacementLineIds = mutableSetOf<Long>()
+        val replacementAllocations = mutableListOf<SaleAllocationEntity>()
+
+        lines.forEach { line ->
+            val key = normalizeItemKey(line.item)
+            val queue = queues[key] ?: return@forEach
+            if (queue.size < line.quantity) return@forEach
+
+            val chosen = buildList {
+                repeat(line.quantity) { add(queue.removeAt(0)) }
+            }
+            replacementLineIds += line.id
+            ImeiAssignmentStore.put(context, line.id, chosen.map { it.identifier })
+
+            chosen.groupBy { it.purchaseId }.forEach { (purchaseId, selected) ->
+                val purchase = purchaseMap[purchaseId] ?: return@forEach
+                val effectiveNet = (purchase.netPence - if (purchase.partialRefund) purchase.refundNetPence else 0).coerceAtLeast(0)
+                val unitNetCost = if (purchase.quantity > 0) effectiveNet / purchase.quantity else 0
+                replacementAllocations += SaleAllocationEntity(
+                    saleLineId = line.id,
+                    purchaseId = purchaseId,
+                    quantity = selected.size,
+                    unitNetCostPence = unitNetCost
+                )
+            }
+        }
+
+        if (replacementLineIds.isEmpty()) return
+        val preserved = existingAllocations.filter { it.saleLineId !in replacementLineIds }
+        dao.deleteAllocationsForSale(saleId)
+        preserved.forEach { dao.insertSaleAllocation(it.copy(id = 0)) }
+        replacementAllocations.forEach { dao.insertSaleAllocation(it) }
+    }
+
+    private fun normalizeItemKey(value: String): String = value.trim().lowercase()
+
     fun deleteSale(value: SaleEntity, onSuccess: () -> Unit = {}) = action("Sales invoice deleted", onSuccess) {
+        val lineIds = dao.getSaleLinesForSale(value.id).map { it.id }
         repo.deleteSale(value.id)
+        lineIds.forEach { ImeiAssignmentStore.clear(context, it) }
     }
 
     fun exportSaleInvoice(saleId: Long, uri: Uri) = action("Sales invoice downloaded") {
@@ -133,7 +308,12 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
         val purchaseMap = dao.getPurchases().associateBy { it.id }
         val orderMap = dao.getPurchaseOrders().associateBy { it.id }
 
-        val sourceNotes = allocations.groupBy { it.saleLineId }.mapValues { (_, lineAllocations) ->
+        val preciseNotes = lines.mapNotNull { line ->
+            val assigned = ImeiAssignmentStore.get(context, line.id)
+            if (assigned.isEmpty()) null else line.id to assigned.joinToString("\n")
+        }.toMap()
+
+        val legacyNotes = allocations.groupBy { it.saleLineId }.mapValues { (_, lineAllocations) ->
             lineAllocations.mapNotNull { allocation ->
                 val purchase = purchaseMap[allocation.purchaseId] ?: return@mapNotNull null
                 val note = purchase.notes.trim()
@@ -142,6 +322,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
             }.distinct().joinToString("\n")
         }.filterValues { it.isNotBlank() }
 
+        val sourceNotes = legacyNotes + preciseNotes
         val pdfPath = TraceableInvoicePdf.create(context, business, customer, sale, lines, sourceNotes)
         dao.updateSale(sale.copy(pdfPath = pdfPath, updatedAtMillis = System.currentTimeMillis()))
     }
