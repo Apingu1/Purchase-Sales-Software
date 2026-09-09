@@ -152,15 +152,8 @@ object InvoicePdf {
         text("VAT", 390f, y, 10f); text(formatMoney(sale.vatPence), 490f, y, 10f, true); y += 18f
         text("TOTAL", 390f, y, 12f, true); text(formatMoney(sale.grossPence), 490f, y, 12f, true); y += 26f
 
-        when (sale.vatType) {
-            VatTypes.REVERSE -> {
-                paint.color = android.graphics.Color.RED
-                text("Reverse charge applies - customer to account for VAT. VAT charged: £0.00", 40f, y, 9f, true)
-                y += 13f
-                text("Reverse VAT (notional): ${formatMoney(sale.reverseVatPence)}", 40f, y, 9f, true)
-                paint.color = android.graphics.Color.BLACK
-            }
-            VatTypes.NO_VAT -> text("No VAT charged on this invoice.", 40f, y, 9f)
+        if (sale.vatType == VatTypes.NO_VAT) {
+            text("No VAT charged on this invoice.", 40f, y, 9f)
         }
 
         y += 22f
@@ -200,16 +193,10 @@ object XlsxExport {
                 val creditVat = if (p.refundNetPence > 0 || p.refundVatPence > 0) p.refundVatPence else breakdownFromGross(creditGross.coerceAtMost(p.grossPence), p.vatType).vatPence
                 val reverseCredit = if (p.vatType == VatTypes.REVERSE) breakdownFromGross(creditNet, VatTypes.REVERSE).reverseVatPence else 0
                 purRows += listOf(
-                    purRows.size + 1,
-                    p.supplier,
-                    editDate(p.purchaseDateEpochDay),
+                    purRows.size + 1, p.supplier, editDate(p.purchaseDateEpochDay),
                     if (p.partialRefund) "PARTIAL REFUND - ${p.item}" else "REFUND / RETURN - ${p.item}",
-                    -creditNet / 100.0,
-                    -creditVat / 100.0,
-                    -(creditNet + creditVat) / 100.0,
-                    null,
-                    if (p.partialRefund) 0 else -p.returnedQty,
-                    -(creditNet + creditVat) / 100.0,
+                    -creditNet / 100.0, -creditVat / 100.0, -(creditNet + creditVat) / 100.0, null,
+                    if (p.partialRefund) 0 else -p.returnedQty, -(creditNet + creditVat) / 100.0,
                     buildString {
                         append(if (p.partialRefund) "PARTIAL MONETARY REFUND / PRICE ADJUSTMENT" else p.status.replace('_', ' '))
                         append(" | Net refunded ${formatMoney(creditNet)} | VAT refunded ${formatMoney(creditVat)}")
@@ -305,7 +292,6 @@ object XlsxExport {
                 "<cols><col min=\"1\" max=\"${headers.size}\" width=\"16\" customWidth=\"1\"/></cols>" +
                 "<sheetData>"
         )
-
         fun rowXml(r: Int, values: List<Any?>, header: Boolean = false) {
             sb.append("<row r=\"$r\">")
             values.forEachIndexed { c, v ->
