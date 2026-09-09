@@ -56,10 +56,7 @@ object TraceableInvoicePdf {
                 words.forEach { word ->
                     if (current.isBlank()) current = word
                     else if (current.length + 1 + word.length <= maxChars) current += " $word"
-                    else {
-                        result += current
-                        current = word
-                    }
+                    else { result += current; current = word }
                 }
                 if (current.isNotBlank()) result += current
             }
@@ -122,21 +119,13 @@ object TraceableInvoicePdf {
             y += 18f
 
             if (noteLines.isNotEmpty()) {
-                text("Item details / IMEI / serial:", 48f, y, 8f, true)
-                y += 12f
-                noteLines.forEach { noteLine ->
-                    text(noteLine.take(92), 58f, y, 8f)
-                    y += 12f
-                }
+                text("Item details / IMEI / serial:", 48f, y, 8f, true); y += 12f
+                noteLines.forEach { noteLine -> text(noteLine.take(92), 58f, y, 8f); y += 12f }
             }
 
             if (index < lines.lastIndex) {
-                y += 4f
-                canvas.drawLine(40f, y, 555f, y, paint)
-                y += 10f
-            } else {
-                y += 5f
-            }
+                y += 4f; canvas.drawLine(40f, y, 555f, y, paint); y += 10f
+            } else y += 5f
         }
 
         if (y > 650f) y = startNewPage()
@@ -146,15 +135,8 @@ object TraceableInvoicePdf {
         text("VAT", 390f, y, 10f); text(formatMoney(sale.vatPence), 490f, y, 10f, true); y += 18f
         text("TOTAL", 390f, y, 12f, true); text(formatMoney(sale.grossPence), 490f, y, 12f, true); y += 26f
 
-        when (sale.vatType) {
-            VatTypes.REVERSE -> {
-                paint.color = android.graphics.Color.RED
-                text("Reverse charge applies - customer to account for VAT. VAT charged: £0.00", 40f, y, 9f, true)
-                y += 13f
-                text("Reverse VAT (notional): ${formatMoney(sale.reverseVatPence)}", 40f, y, 9f, true)
-                paint.color = android.graphics.Color.BLACK
-            }
-            VatTypes.NO_VAT -> text("No VAT charged on this invoice.", 40f, y, 9f)
+        if (sale.vatType == VatTypes.NO_VAT) {
+            text("No VAT charged on this invoice.", 40f, y, 9f)
         }
 
         y += 22f
