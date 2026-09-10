@@ -12,7 +12,7 @@ enum DropboxSync {
             } else { token = business.dropboxAccessToken }
             guard !token.isEmpty else { throw SyncError.message("Enter a Dropbox access token or App Key + refresh token") }
             let root = business.dropboxRoot.isEmpty ? "/Purchase-Sales-Software" : business.dropboxRoot
-            let periodName = store.selectedPeriod?.name.replacingOccurrences(of: "[^A-Za-z0-9._-]", with: "_", options: .regularExpression) ?? "Unassigned"
+            let selectedPeriodName = store.selectedPeriod?.name.replacingOccurrences(of: "[^A-Za-z0-9._-]", with: "_", options: .regularExpression) ?? "Unassigned"
             var completedDeletions: [String] = []
             for path in store.pendingDropboxDeletions {
                 try await deleteIfExists(path: path, token: token)
@@ -20,7 +20,7 @@ enum DropboxSync {
             }
             store.completeDropboxDeletions(completedDeletions)
             if let workbook = Exports.accountingWorkbook(data: store.data, period: store.selectedPeriod), let bytes = try? Data(contentsOf: workbook) {
-                try await upload(bytes, to: "\(root)/Accounting Periods/\(periodName)/\(workbook.lastPathComponent)", token: token)
+                try await upload(bytes, to: "\(root)/Accounting Periods/\(selectedPeriodName)/\(workbook.lastPathComponent)", token: token)
             }
             let purchaseDump = store.purchaseOrders.map { order in
                 "\(order.purchaseDate.shortUK)\t\(order.supplier)\t\(order.orderNumber)\t\(order.status.label)\t\(order.lines.map { $0.item }.joined(separator: ", "))"
