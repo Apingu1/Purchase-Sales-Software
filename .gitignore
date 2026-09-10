@@ -1,0 +1,19 @@
+# Android
+.gradle/
+**/build/
+local.properties
+*.jks
+*.keystore
+!ci-signing/*.keystore.b64
+
+# Apple / Xcode
+DerivedData/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+*.xcuserstate
+*.ipa
+*.xcarchive
+ios/Config/Signing.xcconfig
+ios/ci-signing/
+
+.DS_Store

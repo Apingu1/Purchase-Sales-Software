@@ -1,6 +1,8 @@
-# Purchase & Sales Software — Android V1
+# Purchase & Sales Software — Android and iOS
 
 Native Android purchasing, inventory, sales, VAT and invoicing app built for a fast phone-first workflow.
+
+The repository also contains a native SwiftUI iOS build under `ios/`, based on the same business rules and latest Android V1 workflow.
 
 ## Core workflow
 
@@ -86,3 +88,25 @@ The app intentionally has no FEFO/expiry logic, no supplier master-data module, 
 Build branch: `feature/android-v1-complete`.
 
 CI status: GitHub Actions builds the installable APK from this branch.
+
+## iOS build
+
+The iOS app uses SwiftUI and an offline, versioned local data file. It includes the five-tab phone workflow, unit-gross purchase pricing, partial refunds, purchase filters and duplication, inventory allocation, IMEI/serial selection, sales invoice PDF generation/download/deletion, customers, returns, expenses, accounting periods, VAT/profit reporting, Excel-readable period export and Dropbox sync.
+
+The permanent iOS application identity is:
+
+- Bundle identifier: `com.apingu.purchasesales`
+- Version: `1.1.0`
+- Build number: assigned monotonically by GitHub Actions
+
+Generate the Xcode project on a Mac:
+
+```bash
+brew install xcodegen
+ios/scripts/generate_project.sh
+open ios/PurchaseSales.xcodeproj
+```
+
+Select the permanent Apple Developer Team under **Signing & Capabilities**. Do not change the bundle identifier or move later releases to another Apple Team/App Store Connect record. Xcode's automatic signing is suitable for local device testing; the manual `iOS Signed IPA` GitHub workflow provides repeatable distribution builds.
+
+Every iOS push runs `.github/workflows/ios-ci.yml`, which compiles and tests the app on a macOS/Xcode runner and uploads a simulator `.app` artifact. A device-installable signed IPA requires an Apple Developer membership, distribution certificate and provisioning profile configured as GitHub Actions secrets. See `ios/SIGNING-ASSET-REGISTER.md` for the permanent update identity and secret names.

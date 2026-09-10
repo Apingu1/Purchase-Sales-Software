@@ -1,0 +1,43 @@
+name: PurchaseSales
+options:
+  bundleIdPrefix: com.apingu
+  deploymentTarget:
+    iOS: "16.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "1.1.0"
+    CODE_SIGN_STYLE: Automatic
+configs:
+  Debug: debug
+  Release: release
+targets:
+  PurchaseSales:
+    type: application
+    platform: iOS
+    sources:
+      - path: PurchaseSales
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.apingu.purchasesales
+        PRODUCT_NAME: PurchaseSales
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: NO
+        INFOPLIST_FILE: PurchaseSales/Info.plist
+        CODE_SIGN_ENTITLEMENTS: PurchaseSales/PurchaseSales.entitlements
+    scheme:
+      testTargets:
+        - PurchaseSalesTests
+  PurchaseSalesTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: PurchaseSalesTests
+    dependencies:
+      - target: PurchaseSales
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.apingu.purchasesales.tests
+

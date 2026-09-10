@@ -1,0 +1,46 @@
+name: iOS Build
+
+on:
+  push:
+    branches: [main, feature/ios-v1]
+    paths: ["ios/**", ".github/workflows/ios-ci.yml"]
+  pull_request:
+    paths: ["ios/**", ".github/workflows/ios-ci.yml"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        run: chmod +x ios/scripts/generate_project.sh && ios/scripts/generate_project.sh
+      - name: Build for iOS Simulator
+        run: |
+          xcodebuild build \
+            -project ios/PurchaseSales.xcodeproj \
+            -scheme PurchaseSales \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath ios/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CURRENT_PROJECT_VERSION="${GITHUB_RUN_NUMBER}"
+      - name: Run unit tests
+        run: |
+          xcodebuild test \
+            -project ios/PurchaseSales.xcodeproj \
+            -scheme PurchaseSales \
+            -destination 'platform=iOS Simulator,name=iPhone 16 Pro' \
+            -derivedDataPath ios/DerivedData \
+            CODE_SIGNING_ALLOWED=NO
+      - name: Package simulator build
+        run: ditto -c -k --sequesterRsrc --keepParent ios/DerivedData/Build/Products/Debug-iphonesimulator/PurchaseSales.app Purchase-Sales-Software-iOS-Simulator.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Purchase-Sales-Software-iOS-Simulator
+          path: Purchase-Sales-Software-iOS-Simulator.zip
+          retention-days: 30
+
