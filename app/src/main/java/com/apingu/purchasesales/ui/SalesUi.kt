@@ -140,12 +140,18 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
                                     Text(customerMap[original?.customerId]?.companyName ?: "Customer", style = MaterialTheme.typography.bodySmall)
                                     Text("Against ${original?.invoiceNo ?: "sales invoice"} • ${displayDate(credit.creditDateEpochDay)}", style = MaterialTheme.typography.bodySmall)
                                     if (credit.notes.isNotBlank()) Text(credit.notes, style = MaterialTheme.typography.bodySmall)
-                                    TextButton({
-                                        downloadCredit = credit
-                                        creditDownloadLauncher.launch("${credit.creditNoteNo}.pdf")
-                                    }) {
-                                        Icon(Icons.Default.Download, null)
-                                        Text(" Download credit note")
+                                    Row {
+                                        TextButton({ nav.navigate("credit-note/edit/${credit.id}") }) {
+                                            Icon(Icons.Default.Edit, null)
+                                            Text(" Edit")
+                                        }
+                                        TextButton({
+                                            downloadCredit = credit
+                                            creditDownloadLauncher.launch("${credit.creditNoteNo}.pdf")
+                                        }) {
+                                            Icon(Icons.Default.Download, null)
+                                            Text(" Download credit note")
+                                        }
                                     }
                                 }
                             }
@@ -437,9 +443,15 @@ private data class CreditLineForm(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun CreditNoteEditor(vm: AppViewModel, nav: NavHostController, saleId: Long) {
+fun CreditNoteEditor(
+    vm: AppViewModel,
+    nav: NavHostController,
+    saleId: Long = 0L,
+    creditNoteId: Long = 0L
+) {
     val context = LocalContext.current
     val sales by vm.sales.collectAsStateWithLifecycle()
+    val creditNotes by vm.creditNotes.collectAsStateWithLifecycle()
     val allLines by vm.saleLines.collectAsStateWithLifecycle()
     val returns by vm.saleReturns.collectAsStateWithLifecycle()
     val creditedImeis by vm.creditNoteImeis.collectAsStateWithLifecycle()
@@ -448,27 +460,56 @@ fun CreditNoteEditor(vm: AppViewModel, nav: NavHostController, saleId: Long) {
     val purchaseOrders by vm.purchaseOrders.collectAsStateWithLifecycle()
     val customers by vm.customers.collectAsStateWithLifecycle()
 
-    val sale = sales.firstOrNull { it.id == saleId }
+    val existingCredit = creditNotes.firstOrNull { it.id == creditNoteId }
+    if (creditNoteId > 0 && existingCredit == null) {
+        LoadingScreen()
+        return
+    }
+
+    val resolvedSaleId = existingCredit?.saleId ?: saleId
+    val sale = sales.firstOrNull { it.id == resolvedSaleId }
     if (sale == null) {
         LoadingScreen()
         return
     }
-    val lines = allLines.filter { it.saleId == saleId }
+
+    val lines = allLines.filter { it.saleId == resolvedSaleId }
+    val currentReturns = if (creditNoteId > 0) returns.filter { it.creditNoteId == creditNoteId } else emptyList()
+    val currentImeis = if (creditNoteId > 0) creditedImeis.filter { it.creditNoteId == creditNoteId } else emptyList()
     val customer = customers.firstOrNull { it.id == sale.customerId }
     val orderMap = purchaseOrders.associateBy { it.id }
     val purchaseMap = purchases.associateBy { it.id }
-    val forms = remember(saleId, lines.size) {
+
+    val forms = remember(resolvedSaleId, creditNoteId, lines.size, currentReturns.size, currentImeis.size) {
         mutableStateListOf<CreditLineForm>().apply {
-            lines.forEach { add(CreditLineForm(it.id)) }
+            lines.forEach { line ->
+                val existingReturn = currentReturns.firstOrNull { it.saleLineId == line.id }
+                val selected = currentImeis.filter { it.saleLineId == line.id }.map { it.identifier }.toSet()
+                add(
+                    CreditLineForm(
+                        saleLineId = line.id,
+                        quantity = existingReturn?.quantity?.toString() ?: "0",
+                        restock = existingReturn?.restock ?: true,
+                        selectedIdentifiers = selected
+                    )
+                )
+            }
         }
     }
 
-    var date by remember(saleId) { mutableStateOf(editDate(epochDayToday())) }
-    var notes by remember(saleId) { mutableStateOf("") }
+    var date by remember(creditNoteId, existingCredit?.creditDateEpochDay) {
+        mutableStateOf(editDate(existingCredit?.creditDateEpochDay ?: epochDayToday()))
+    }
+    var notes by remember(creditNoteId, existingCredit?.notes) {
+        mutableStateOf(existingCredit?.notes.orEmpty())
+    }
 
     fun assignedUnits(line: SaleLineEntity): List<CreditNoteUnitDraft> {
-        val alreadyCredited = creditedImeis.filter { it.saleLineId == line.id }.map { it.identifier }.toSet()
-        val assigned = ImeiAssignmentStore.get(context, line.id).filter { it !in alreadyCredited }
+        val alreadyCreditedElsewhere = creditedImeis
+            .filter { it.saleLineId == line.id && it.creditNoteId != creditNoteId }
+            .map { it.identifier }
+            .toSet()
+        val assigned = ImeiAssignmentStore.get(context, line.id).filter { it !in alreadyCreditedElsewhere }
         val lineAllocations = allocations.filter { it.saleLineId == line.id }
         return assigned.map { identifier ->
             val exactPurchase = lineAllocations.asSequence()
@@ -480,34 +521,53 @@ fun CreditNoteEditor(vm: AppViewModel, nav: NavHostController, saleId: Long) {
         }
     }
 
+    fun creditedElsewhere(lineId: Long): Int =
+        returns.filter { it.saleLineId == lineId && it.creditNoteId != creditNoteId }.sumOf { it.quantity }
+
     val validity = forms.all { form ->
         val line = lines.first { it.id == form.saleLineId }
-        val alreadyReturned = returns.filter { it.saleLineId == line.id }.sumOf { it.quantity }
+        val alreadyReturned = creditedElsewhere(line.id)
         val availableQty = (line.quantity - alreadyReturned).coerceAtLeast(0)
         val qty = form.quantity.toIntOrNull() ?: 0
         val tracked = assignedUnits(line)
         qty in 0..availableQty && (qty <= 0 || tracked.isEmpty() || form.selectedIdentifiers.size == qty)
     }
     val anySelected = forms.any { (it.quantity.toIntOrNull() ?: 0) > 0 }
+    val editing = existingCredit != null
 
-    ScreenScaffold("Issue credit note", onBack = { nav.popBackStack() }) { inner ->
+    ScreenScaffold(
+        if (editing) "Edit ${existingCredit!!.creditNoteNo}" else "Issue credit note",
+        onBack = { nav.popBackStack() }
+    ) { inner ->
         Column(
             Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (editing) {
+                        Text(existingCredit!!.creditNoteNo, fontWeight = FontWeight.Bold)
+                    }
                     Text("Original invoice ${sale.invoiceNo}", fontWeight = FontWeight.Bold)
                     Text(customer?.companyName ?: "Customer")
-                    Text("Select only the item(s) being returned or credited. The original invoice remains unchanged.", style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        if (editing) "Changes update this existing credit note and recalculate stock, profit and VAT."
+                        else "Select only the item(s) being returned or credited. The original invoice remains unchanged.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
                 }
             }
-            FormField("Credit note date (DD/MM/YYYY)", date, { date = it })
+
+            FormField("Date credit note issued (DD/MM/YYYY)", date, { date = it })
+            Text(
+                "Tap the calendar icon to choose the date the credit note was issued.",
+                style = MaterialTheme.typography.bodySmall
+            )
 
             lines.forEach { line ->
                 val index = forms.indexOfFirst { it.saleLineId == line.id }
                 val form = forms[index]
-                val alreadyReturned = returns.filter { it.saleLineId == line.id }.sumOf { it.quantity }
+                val alreadyReturned = creditedElsewhere(line.id)
                 val availableQty = (line.quantity - alreadyReturned).coerceAtLeast(0)
                 val qty = form.quantity.toIntOrNull() ?: 0
                 val units = assignedUnits(line)
@@ -515,11 +575,19 @@ fun CreditNoteEditor(vm: AppViewModel, nav: NavHostController, saleId: Long) {
                 ElevatedCard(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(line.item, fontWeight = FontWeight.SemiBold)
-                        Text("Sold ${line.quantity} • Already credited $alreadyReturned • Available to credit $availableQty", style = MaterialTheme.typography.bodySmall)
+                        Text(
+                            "Sold ${line.quantity} • Credited on other notes $alreadyReturned • Available for this note $availableQty",
+                            style = MaterialTheme.typography.bodySmall
+                        )
                         OutlinedTextField(
                             value = form.quantity,
                             onValueChange = { value ->
-                                forms[index] = form.copy(quantity = value.filter { it.isDigit() }.take(3))
+                                val clean = value.filter { it.isDigit() }.take(3)
+                                val newQty = clean.toIntOrNull() ?: 0
+                                forms[index] = form.copy(
+                                    quantity = clean,
+                                    selectedIdentifiers = if (newQty <= 0) emptySet() else form.selectedIdentifiers.take(newQty).toSet()
+                                )
                             },
                             label = { Text("Quantity to credit") },
                             supportingText = { Text("Maximum $availableQty") },
@@ -527,6 +595,7 @@ fun CreditNoteEditor(vm: AppViewModel, nav: NavHostController, saleId: Long) {
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true
                         )
+
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Checkbox(
                                 checked = form.restock,
@@ -557,8 +626,13 @@ fun CreditNoteEditor(vm: AppViewModel, nav: NavHostController, saleId: Long) {
                             }
                             Text("Selected ${form.selectedIdentifiers.size} / $qty", style = MaterialTheme.typography.bodySmall)
                         }
+
                         if (qty > availableQty) {
-                            Text("Quantity exceeds the amount still available to credit.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                            Text(
+                                "Quantity exceeds the amount available to credit.",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall
+                            )
                         }
                     }
                 }
@@ -586,6 +660,7 @@ fun CreditNoteEditor(vm: AppViewModel, nav: NavHostController, saleId: Long) {
                     Text("Net ${formatMoney(totalNet)} • VAT ${formatMoney(totalVat)}", style = MaterialTheme.typography.bodySmall)
                 }
             }
+
             FormField("Credit note notes (optional)", notes, { notes = it }, singleLine = false)
 
             Button(
@@ -603,8 +678,9 @@ fun CreditNoteEditor(vm: AppViewModel, nav: NavHostController, saleId: Long) {
                             units = units
                         )
                     }
-                    vm.issueCreditNote(
+                    vm.saveCreditNote(
                         CreditNoteDraft(
+                            id = creditNoteId,
                             saleId = sale.id,
                             dateEpochDay = parseDateOrToday(date),
                             notes = notes,
@@ -614,9 +690,9 @@ fun CreditNoteEditor(vm: AppViewModel, nav: NavHostController, saleId: Long) {
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Icon(Icons.Default.ReceiptLong, null)
+                Icon(if (editing) Icons.Default.Save else Icons.Default.ReceiptLong, null)
                 Spacer(Modifier.width(6.dp))
-                Text("Issue credit note")
+                Text(if (editing) "Save credit note changes" else "Issue credit note")
             }
             Spacer(Modifier.height(20.dp))
         }
