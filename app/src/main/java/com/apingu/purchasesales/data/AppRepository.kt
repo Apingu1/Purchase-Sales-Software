@@ -86,6 +86,7 @@ data class CreditNoteLineDraft(
 )
 
 data class CreditNoteDraft(
+    val id: Long = 0,
     val saleId: Long,
     val dateEpochDay: Long,
     val notes: String,
@@ -619,14 +620,27 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     }
 
 
-    suspend fun issueCreditNote(draft: CreditNoteDraft): Long {
+    suspend fun saveCreditNote(draft: CreditNoteDraft): Long {
         require(draft.lines.isNotEmpty()) { "Select at least one item to credit" }
+
+        val existingCredit = draft.id.takeIf { it > 0 }?.let { dao.getCreditNote(it) }
+        if (draft.id > 0) requireNotNull(existingCredit) { "Credit note not found" }
+        require(existingCredit == null || existingCredit.saleId == draft.saleId) {
+            "A credit note cannot be moved to a different sales invoice"
+        }
+
         val sale = dao.getSale(draft.saleId) ?: error("Sales invoice not found")
         val saleLines = dao.getSaleLinesForSale(sale.id).associateBy { it.id }
-        val allReturns = dao.getSaleReturns()
-        val allReturnAllocations = dao.getSaleReturnAllocations()
+
+        val oldReturns = existingCredit?.let { dao.getSaleReturnsForCreditNote(it.id) }.orEmpty()
+        val oldReturnIds = oldReturns.map { it.id }.toSet()
+        val allReturns = dao.getSaleReturns().filterNot { it.creditNoteId == draft.id }
+        val allReturnAllocations = dao.getSaleReturnAllocations().filterNot { it.saleReturnId in oldReturnIds }
         val allAllocations = dao.getSaleAllocations()
-        val usedIdentifiers = dao.getCreditNoteImeis().map { it.identifier }.toSet()
+        val usedIdentifiers = dao.getCreditNoteImeis()
+            .filterNot { it.creditNoteId == draft.id }
+            .map { it.identifier }
+            .toSet()
 
         data class Prepared(
             val draft: CreditNoteLineDraft,
@@ -666,21 +680,39 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val totalVat = prepared.sumOf { it.breakdown.vatPence }
         val totalGross = prepared.sumOf { it.breakdown.grossPence }
         val totalReverse = prepared.sumOf { it.breakdown.reverseVatPence }
-        val creditNo = generateCreditNoteNumber()
+        val creditNo = existingCredit?.creditNoteNo ?: generateCreditNoteNumber()
 
         val creditId = db.withTransaction {
-            val headerId = dao.insertCreditNote(
-                CreditNoteEntity(
-                    creditNoteNo = creditNo,
-                    saleId = sale.id,
-                    creditDateEpochDay = draft.dateEpochDay,
-                    netPence = totalNet,
-                    vatPence = totalVat,
-                    grossPence = totalGross,
-                    reverseVatPence = totalReverse,
-                    notes = draft.notes.trim()
+            val headerId = if (existingCredit != null) {
+                dao.deleteReturnAllocationsForCreditNote(existingCredit.id)
+                dao.deleteCreditNoteImeisForCreditNote(existingCredit.id)
+                dao.deleteSaleReturnsForCreditNote(existingCredit.id)
+                dao.updateCreditNote(
+                    existingCredit.copy(
+                        creditDateEpochDay = draft.dateEpochDay,
+                        netPence = totalNet,
+                        vatPence = totalVat,
+                        grossPence = totalGross,
+                        reverseVatPence = totalReverse,
+                        notes = draft.notes.trim(),
+                        updatedAtMillis = System.currentTimeMillis()
+                    )
                 )
-            )
+                existingCredit.id
+            } else {
+                dao.insertCreditNote(
+                    CreditNoteEntity(
+                        creditNoteNo = creditNo,
+                        saleId = sale.id,
+                        creditDateEpochDay = draft.dateEpochDay,
+                        netPence = totalNet,
+                        vatPence = totalVat,
+                        grossPence = totalGross,
+                        reverseVatPence = totalReverse,
+                        notes = draft.notes.trim()
+                    )
+                )
+            }
 
             prepared.forEach { item ->
                 val returnId = dao.insertSaleReturn(
@@ -769,6 +801,15 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         }
         val pdfPath = CreditNotePdf.create(context, business, customer, sale, credit, pdfLines)
         dao.updateCreditNote(credit.copy(pdfPath = pdfPath, updatedAtMillis = System.currentTimeMillis()))
+
+        if (existingCredit != null && existingCredit.creditDateEpochDay != draft.dateEpochDay) {
+            DropboxDeletionQueue.enqueueCreditNote(
+                context = context,
+                creditDateEpochDay = existingCredit.creditDateEpochDay,
+                creditNoteNo = existingCredit.creditNoteNo
+            )
+        }
+
         enqueueSync()
         return creditId
     }
