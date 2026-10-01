@@ -73,6 +73,25 @@ data class SaleDraft(
     val manualInvoiceNo: String? = null
 )
 
+data class CreditNoteUnitDraft(
+    val identifier: String,
+    val purchaseId: Long = 0
+)
+
+data class CreditNoteLineDraft(
+    val saleLineId: Long,
+    val quantity: Int,
+    val restock: Boolean,
+    val units: List<CreditNoteUnitDraft> = emptyList()
+)
+
+data class CreditNoteDraft(
+    val saleId: Long,
+    val dateEpochDay: Long,
+    val notes: String,
+    val lines: List<CreditNoteLineDraft>
+)
+
 data class ExpenseDraft(
     val id: Long = 0,
     val dateEpochDay: Long,
@@ -94,8 +113,10 @@ data class FullData(
     val sales: List<SaleEntity>,
     val saleLines: List<SaleLineEntity>,
     val allocations: List<SaleAllocationEntity>,
+    val creditNotes: List<CreditNoteEntity>,
     val saleReturns: List<SaleReturnEntity>,
     val returnAllocations: List<SaleReturnAllocationEntity>,
+    val creditNoteImeis: List<CreditNoteImeiEntity>,
     val expenses: List<ExpenseEntity>
 )
 
@@ -110,8 +131,10 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     val sales = dao.observeSales()
     val saleLines = dao.observeSaleLines()
     val allocations = dao.observeSaleAllocations()
+    val creditNotes = dao.observeCreditNotes()
     val saleReturns = dao.observeSaleReturns()
     val returnAllocations = dao.observeSaleReturnAllocations()
+    val creditNoteImeis = dao.observeCreditNoteImeis()
     val expenses = dao.observeExpenses()
 
     suspend fun ensureBusinessDefaults() {
@@ -396,6 +419,42 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
 
     suspend fun markReceivedAll(purchase: PurchaseEntity) { markReceivedAllOrder(purchase.purchaseOrderId.takeIf { it > 0 } ?: purchase.id) }
 
+    suspend fun deletePurchaseOrder(orderId: Long) {
+        val order = dao.getPurchaseOrder(orderId) ?: error("Purchase order not found")
+        val lines = dao.getPurchasesForOrder(orderId)
+        require(lines.isNotEmpty()) { "Purchase order has no item lines" }
+        val allocations = dao.getSaleAllocations()
+        val allocated = lines.firstOrNull { line -> allocations.any { it.purchaseId == line.id } }
+        require(allocated == null) {
+            "${allocated?.item ?: "This purchase"} has sales history and cannot be deleted. Reverse/correct the related sale first."
+        }
+
+        lines.forEach { line ->
+            line.invoicePath?.let { path ->
+                val file = File(path)
+                val ext = file.extension.ifBlank { "bin" }
+                val safeItem = line.item.replace(Regex("[^A-Za-z0-9._-]+"), "_").take(48)
+                DropboxDeletionQueue.enqueuePurchase(context, line.purchaseDateEpochDay, "PUR_${line.id}_${safeItem}.$ext")
+            }
+        }
+        order.invoicePath?.let { path ->
+            val first = lines.firstOrNull()
+            if (first != null && first.invoicePath.isNullOrBlank()) {
+                val file = File(path)
+                val ext = file.extension.ifBlank { "bin" }
+                val safeItem = first.item.replace(Regex("[^A-Za-z0-9._-]+"), "_").take(48)
+                DropboxDeletionQueue.enqueuePurchase(context, order.purchaseDateEpochDay, "PUR_${first.id}_${safeItem}.$ext")
+            }
+        }
+
+        db.withTransaction {
+            lines.forEach { dao.deletePurchase(it) }
+            dao.deletePurchaseOrder(order)
+        }
+        (lines.mapNotNull { it.invoicePath } + listOfNotNull(order.invoicePath)).distinct().forEach { File(it).delete() }
+        enqueueSync()
+    }
+
     suspend fun saveExpense(draft: ExpenseDraft, attachmentUri: Uri? = null): Long {
         require(draft.supplier.isNotBlank()) { "Store/supplier is required" }
         require(draft.details.isNotBlank()) { "Expense details are required" }
@@ -491,6 +550,9 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
 
     suspend fun deleteSale(saleId: Long) {
         val sale = dao.getSale(saleId) ?: return
+        require(dao.getCreditNotesForSale(saleId).isEmpty()) {
+            "This invoice has a credit note and must be retained for accounting traceability."
+        }
         db.withTransaction {
             val writableDb = db.openHelper.writableDatabase
             writableDb.execSQL(
@@ -556,6 +618,170 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         require(remaining == 0) { "Not enough received inventory for ${line.item}. Short by $remaining." }
     }
 
+
+    suspend fun issueCreditNote(draft: CreditNoteDraft): Long {
+        require(draft.lines.isNotEmpty()) { "Select at least one item to credit" }
+        val sale = dao.getSale(draft.saleId) ?: error("Sales invoice not found")
+        val saleLines = dao.getSaleLinesForSale(sale.id).associateBy { it.id }
+        val allReturns = dao.getSaleReturns()
+        val allReturnAllocations = dao.getSaleReturnAllocations()
+        val allAllocations = dao.getSaleAllocations()
+        val usedIdentifiers = dao.getCreditNoteImeis().map { it.identifier }.toSet()
+
+        data class Prepared(
+            val draft: CreditNoteLineDraft,
+            val line: SaleLineEntity,
+            val breakdown: VatBreakdown
+        )
+
+        val prepared = draft.lines.map { lineDraft ->
+            val line = saleLines[lineDraft.saleLineId] ?: error("Credit note item does not belong to this invoice")
+            val alreadyCredited = allReturns.filter { it.saleLineId == line.id }.sumOf { it.quantity }
+            require(lineDraft.quantity > 0) { "Credit quantity must be greater than zero for ${line.item}" }
+            require(alreadyCredited + lineDraft.quantity <= line.quantity) {
+                "Credit quantity exceeds the remaining sold quantity for ${line.item}"
+            }
+            if (lineDraft.units.isNotEmpty()) {
+                require(lineDraft.units.size == lineDraft.quantity) {
+                    "Select exactly ${lineDraft.quantity} IMEI/serial number(s) for ${line.item}"
+                }
+                require(lineDraft.units.map { it.identifier }.distinct().size == lineDraft.units.size) {
+                    "Duplicate IMEI/serial selected for ${line.item}"
+                }
+                require(lineDraft.units.none { it.identifier in usedIdentifiers }) {
+                    "One of the selected IMEI/serial numbers has already been credited"
+                }
+            }
+
+            val inferredUnitNet = breakdownFromGross(line.unitGrossPence, sale.vatType).netPence
+            val breakdown = if (inferredUnitNet * line.quantity == line.lineNetPence) {
+                breakdownFromNet(inferredUnitNet * lineDraft.quantity, sale.vatType)
+            } else {
+                breakdownFromGross(line.unitGrossPence * lineDraft.quantity, sale.vatType)
+            }
+            Prepared(lineDraft, line, breakdown)
+        }
+
+        val totalNet = prepared.sumOf { it.breakdown.netPence }
+        val totalVat = prepared.sumOf { it.breakdown.vatPence }
+        val totalGross = prepared.sumOf { it.breakdown.grossPence }
+        val totalReverse = prepared.sumOf { it.breakdown.reverseVatPence }
+        val creditNo = generateCreditNoteNumber()
+
+        val creditId = db.withTransaction {
+            val headerId = dao.insertCreditNote(
+                CreditNoteEntity(
+                    creditNoteNo = creditNo,
+                    saleId = sale.id,
+                    creditDateEpochDay = draft.dateEpochDay,
+                    netPence = totalNet,
+                    vatPence = totalVat,
+                    grossPence = totalGross,
+                    reverseVatPence = totalReverse,
+                    notes = draft.notes.trim()
+                )
+            )
+
+            prepared.forEach { item ->
+                val returnId = dao.insertSaleReturn(
+                    SaleReturnEntity(
+                        saleLineId = item.line.id,
+                        creditNoteId = headerId,
+                        returnDateEpochDay = draft.dateEpochDay,
+                        quantity = item.draft.quantity,
+                        refundGrossPence = item.breakdown.grossPence,
+                        refundNetPence = item.breakdown.netPence,
+                        refundVatPence = item.breakdown.vatPence,
+                        restock = item.draft.restock,
+                        notes = draft.notes.trim()
+                    )
+                )
+
+                item.draft.units.forEach { unit ->
+                    dao.insertCreditNoteImei(
+                        CreditNoteImeiEntity(
+                            creditNoteId = headerId,
+                            saleReturnId = returnId,
+                            saleLineId = item.line.id,
+                            identifier = unit.identifier,
+                            purchaseId = unit.purchaseId
+                        )
+                    )
+                }
+
+                if (item.draft.restock) {
+                    val lineAllocations = allAllocations.filter { it.saleLineId == item.line.id }.sortedByDescending { it.id }
+                    val restoredBefore = allReturnAllocations.groupBy { it.saleAllocationId }
+                        .mapValues { (_, rows) -> rows.sumOf { it.quantity } }
+                        .toMutableMap()
+
+                    suspend fun restoreFrom(candidates: List<SaleAllocationEntity>, count: Int): Int {
+                        var remaining = count
+                        candidates.forEach { allocation ->
+                            if (remaining <= 0) return@forEach
+                            val available = allocation.quantity - (restoredBefore[allocation.id] ?: 0)
+                            if (available <= 0) return@forEach
+                            val take = minOf(remaining, available)
+                            dao.insertSaleReturnAllocation(
+                                SaleReturnAllocationEntity(
+                                    saleReturnId = returnId,
+                                    saleAllocationId = allocation.id,
+                                    quantity = take
+                                )
+                            )
+                            restoredBefore[allocation.id] = (restoredBefore[allocation.id] ?: 0) + take
+                            remaining -= take
+                        }
+                        return remaining
+                    }
+
+                    var genericCount = item.draft.quantity
+                    item.draft.units.filter { it.purchaseId > 0 }.groupBy { it.purchaseId }.forEach { (purchaseId, units) ->
+                        val remaining = restoreFrom(lineAllocations.filter { it.purchaseId == purchaseId }, units.size)
+                        require(remaining == 0) { "Unable to restore the selected IMEI/serial to its original stock lot" }
+                        genericCount -= units.size
+                    }
+                    if (genericCount > 0) {
+                        val remaining = restoreFrom(lineAllocations, genericCount)
+                        require(remaining == 0) { "Unable to restore all credited stock to inventory" }
+                    }
+                }
+            }
+            headerId
+        }
+
+        val credit = dao.getCreditNote(creditId) ?: error("Credit note was not saved")
+        val customer = dao.getCustomer(sale.customerId) ?: error("Customer not found")
+        val business = dao.getBusiness() ?: BusinessEntity()
+        val returns = dao.getSaleReturnsForCreditNote(creditId)
+        val imeis = dao.getCreditNoteImeisForCreditNote(creditId).groupBy { it.saleReturnId }
+        val pdfLines = returns.mapNotNull { returned ->
+            val line = saleLines[returned.saleLineId] ?: return@mapNotNull null
+            CreditNotePdfLine(
+                item = line.item,
+                quantity = returned.quantity,
+                netPence = returned.refundNetPence,
+                vatPence = returned.refundVatPence,
+                grossPence = returned.refundGrossPence,
+                restock = returned.restock,
+                identifiers = imeis[returned.id].orEmpty().map { it.identifier }
+            )
+        }
+        val pdfPath = CreditNotePdf.create(context, business, customer, sale, credit, pdfLines)
+        dao.updateCreditNote(credit.copy(pdfPath = pdfPath, updatedAtMillis = System.currentTimeMillis()))
+        enqueueSync()
+        return creditId
+    }
+
+    private suspend fun generateCreditNoteNumber(): String {
+        val highest = dao.getCreditNotes().mapNotNull { note ->
+            Regex("^CN-(\\d+)$", RegexOption.IGNORE_CASE)
+                .matchEntire(note.creditNoteNo.trim())
+                ?.groupValues?.getOrNull(1)?.toIntOrNull()
+        }.maxOrNull() ?: 0
+        return "CN-${(highest + 1).toString().padStart(6, '0')}"
+    }
+
     suspend fun recordCustomerReturn(saleLineId: Long, day: Long, quantity: Int, restock: Boolean, notes: String) = db.withTransaction {
         val lines = dao.getSaleLines()
         val line = lines.firstOrNull { it.id == saleLineId } ?: error("Sale line not found")
@@ -602,8 +828,10 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         sales = dao.getSales(),
         saleLines = dao.getSaleLines(),
         allocations = dao.getSaleAllocations(),
+        creditNotes = dao.getCreditNotes(),
         saleReturns = dao.getSaleReturns(),
         returnAllocations = dao.getSaleReturnAllocations(),
+        creditNoteImeis = dao.getCreditNoteImeis(),
         expenses = dao.getExpenses()
     )
 

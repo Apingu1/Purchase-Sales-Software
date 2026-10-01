@@ -39,13 +39,20 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Android SDK
+      - name: Configure Android SDK
         if: steps.project.outputs.present == 'true'
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android platform
-        if: steps.project.outputs.present == 'true'
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+        shell: bash
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort -V | tail -n 1)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found under $SDK_ROOT"
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set up Gradle
         if: steps.project.outputs.present == 'true'

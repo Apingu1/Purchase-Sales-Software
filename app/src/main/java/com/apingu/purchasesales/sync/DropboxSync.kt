@@ -32,6 +32,7 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
             val sales = dao.getSales()
             val saleLines = dao.getSaleLines()
             val allocations = dao.getSaleAllocations()
+            val creditNotes = dao.getCreditNotes()
             val returns = dao.getSaleReturns()
             val returnAllocations = dao.getSaleReturnAllocations()
             val expenses = dao.getExpenses()
@@ -56,6 +57,22 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
             }
             DropboxDeletionQueue.removeSales(applicationContext, completedSaleDeletes)
 
+            val pendingPurchaseDeletes = DropboxDeletionQueue.pendingPurchases(applicationContext)
+            val completedPurchaseDeletes = mutableListOf<PendingPurchaseInvoiceDeletion>()
+            pendingPurchaseDeletes.forEach { pendingDelete ->
+                val period = periods.firstOrNull {
+                    pendingDelete.purchaseDateEpochDay in it.startEpochDay..it.endEpochDay
+                }
+                if (period != null) {
+                    DropboxApi.deleteIfExists(
+                        token,
+                        "$root/Accounting Periods/${safePeriod(period)}/Purchases/Invoices/${pendingDelete.fileName}"
+                    )
+                    completedPurchaseDeletes += pendingDelete
+                }
+            }
+            DropboxDeletionQueue.removePurchases(applicationContext, completedPurchaseDeletes)
+
             // Recovery and inventory remain global/all-time by design.
             val recoveryDir = File(applicationContext.filesDir, "recovery").apply { mkdirs() }
             val allPurchases = File(recoveryDir, "PURCHASES.txt").apply { writeText(purchasesDump(purchases)) }
@@ -74,6 +91,7 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
                 val periodPurchases = purchases.filter { it.purchaseDateEpochDay in period.startEpochDay..period.endEpochDay }
                 val periodSales = sales.filter { it.saleDateEpochDay in period.startEpochDay..period.endEpochDay }
                 val periodReturns = returns.filter { it.returnDateEpochDay in period.startEpochDay..period.endEpochDay }
+                val periodCreditNotes = creditNotes.filter { it.creditDateEpochDay in period.startEpochDay..period.endEpochDay }
                 val periodExpenses = expenses.filter { it.expenseDateEpochDay in period.startEpochDay..period.endEpochDay }
                 val summary = buildFinanceSummary(
                     period.startEpochDay,
@@ -94,6 +112,7 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
                     periodSales,
                     saleLines,
                     periodReturns,
+                    periodCreditNotes,
                     customers,
                     periodExpenses,
                     summary
@@ -117,6 +136,13 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
                     s.pdfPath?.let { path ->
                         val f = File(path)
                         if (f.exists()) DropboxApi.upload(token, "$periodRoot/Sales/Invoices/${s.invoiceNo}.pdf", f.readBytes())
+                    }
+                }
+
+                periodCreditNotes.forEach { credit ->
+                    credit.pdfPath?.let { path ->
+                        val f = File(path)
+                        if (f.exists()) DropboxApi.upload(token, "$periodRoot/Sales/Credit Notes/${credit.creditNoteNo}.pdf", f.readBytes())
                     }
                 }
 

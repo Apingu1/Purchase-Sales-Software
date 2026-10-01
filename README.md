@@ -22,7 +22,9 @@ Purchases remain editable and track received, cancelled and returned quantities 
 - Saved customer cards with a configurable 2–5 character invoice code.
 - Invoice numbering: `CUS-DDMMYY-##`, counted independently for each customer on each day.
 - PDF sales invoices containing business/customer/VAT information and reverse-charge wording where applicable.
-- Customer return/refund records, with an option to return the item to inventory or leave it non-resalable.
+- Proper customer credit notes (`CN-000001`) can be issued from an existing sales invoice for one or more selected lines, with exact IMEI/serial selection where applicable and optional restocking.
+- Credit notes generate their own PDFs, appear in Sales, reverse sales/VAT/COGS in the profit dashboard, and export to the `SALES` worksheet as negative entries.
+- Purchase orders can be permanently deleted only when none of their stock has been allocated to a sale; deleted purchases disappear from subsequent Excel exports.
 - Expenses with VAT, payment method and receipt/invoice attachment.
 - Business Details: company information, VAT number, company number, bank details, invoice terms/footer and accounting period.
 - Profit & VAT analysis: net sales, COGS, gross profit, expenses, net profit, output VAT, recoverable input VAT, reverse VAT notional entries, VAT due to HMRC or VAT refund expected, inventory cost and supplier refunds pending.

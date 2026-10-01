@@ -107,6 +107,7 @@ private fun AppNavigationV3(nav: NavHostController, vm: AppViewModel) {
             composable("sales") { SalesScreen(vm, nav) }
             composable("sale/new") { SaleEditor(vm, nav, 0L) }
             composable("sale/{id}") { SaleEditor(vm, nav, it.arguments?.getString("id")?.toLongOrNull() ?: 0L) }
+            composable("credit-note/{saleId}") { CreditNoteEditor(vm, nav, it.arguments?.getString("saleId")?.toLongOrNull() ?: 0L) }
             composable("more") { MoreScreen(nav) }
             composable("customers") { CustomersScreen(vm, nav) }
             composable("expenses") { ExpensesScreen(vm, nav) }
@@ -282,6 +283,7 @@ private fun PurchaseOrderCardV3(order: PurchaseOrderEntity, lines: List<Purchase
     val isPending = status in PendingReceiptStatusesV3
     val canDuplicate = isPending || status == "RECEIVED"
     var menuExpanded by remember(order.id) { mutableStateOf(false) }
+    var confirmDelete by remember(order.id) { mutableStateOf(false) }
     val totalGross = lines.sumOf { it.grossPence }
     val totalQty = lines.sumOf { it.quantity }
     val received = lines.sumOf { it.receivedQty }
@@ -301,12 +303,12 @@ private fun PurchaseOrderCardV3(order: PurchaseOrderEntity, lines: List<Purchase
                     Text(buildString { append(displayDate(order.purchaseDateEpochDay)); if (order.orderNumber.isNotBlank()) append(" • ${order.orderNumber}") }, style = MaterialTheme.typography.bodySmall)
                 }
                 AssistChip(onClick = {}, label = { Text(status.replace('_', ' ').lowercase().replaceFirstChar { it.uppercase() }) })
-                if (canDuplicate) {
-                    Box {
-                        IconButton(onClick = { menuExpanded = true }) {
-                            Icon(Icons.Default.MoreVert, contentDescription = "Purchase order actions")
-                        }
-                        DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                Box {
+                    IconButton(onClick = { menuExpanded = true }) {
+                        Icon(Icons.Default.MoreVert, contentDescription = "Purchase order actions")
+                    }
+                    DropdownMenu(expanded = menuExpanded, onDismissRequest = { menuExpanded = false }) {
+                        if (canDuplicate) {
                             DropdownMenuItem(
                                 text = { Text("Duplicate order") },
                                 leadingIcon = { Icon(Icons.Default.ContentCopy, null) },
@@ -316,6 +318,14 @@ private fun PurchaseOrderCardV3(order: PurchaseOrderEntity, lines: List<Purchase
                                 }
                             )
                         }
+                        DropdownMenuItem(
+                            text = { Text("Delete purchase") },
+                            leadingIcon = { Icon(Icons.Default.DeleteOutline, null) },
+                            onClick = {
+                                menuExpanded = false
+                                confirmDelete = true
+                            }
+                        )
                     }
                 }
             }
@@ -331,6 +341,23 @@ private fun PurchaseOrderCardV3(order: PurchaseOrderEntity, lines: List<Purchase
                 }
             }
         }
+    }
+
+    if (confirmDelete) {
+        AlertDialog(
+            onDismissRequest = { confirmDelete = false },
+            title = { Text("Delete this purchase?") },
+            text = {
+                Text("This permanently removes the purchase and its item lines from the app and future Excel exports. It can only be deleted if none of its stock has been used on a sales invoice.")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deletePurchaseOrder(order.id)
+                    confirmDelete = false
+                }) { Text("Delete") }
+            },
+            dismissButton = { TextButton({ confirmDelete = false }) { Text("Cancel") } }
+        )
     }
 }
 

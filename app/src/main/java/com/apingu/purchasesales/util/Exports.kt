@@ -32,14 +32,16 @@ object DocumentStore {
         return out.absolutePath
     }
 
-    fun exportAllDocuments(context: Context, treeUri: Uri, purchases: List<PurchaseEntity>, sales: List<SaleEntity>, expenses: List<ExpenseEntity>): Int {
+    fun exportAllDocuments(context: Context, treeUri: Uri, purchases: List<PurchaseEntity>, sales: List<SaleEntity>, creditNotes: List<CreditNoteEntity>, expenses: List<ExpenseEntity>): Int {
         val root = DocumentFile.fromTreeUri(context, treeUri) ?: return 0
         val pDir = root.findFile("Purchases") ?: root.createDirectory("Purchases")
         val sDir = root.findFile("Sales") ?: root.createDirectory("Sales")
+        val cDir = root.findFile("Credit Notes") ?: root.createDirectory("Credit Notes")
         val eDir = root.findFile("Expenses") ?: root.createDirectory("Expenses")
         var count = 0
         purchases.forEach { p -> p.invoicePath?.let { if (copyFile(context, File(it), pDir, "PUR_${p.id}_${safe(p.item)}")) count++ } }
         sales.forEach { s -> s.pdfPath?.let { if (copyFile(context, File(it), sDir, "${s.invoiceNo}.pdf")) count++ } }
+        creditNotes.forEach { c -> c.pdfPath?.let { if (copyFile(context, File(it), cDir, "${c.creditNoteNo}.pdf")) count++ } }
         expenses.forEach { e -> e.attachmentPath?.let { if (copyFile(context, File(it), eDir, "EXP_${e.id}_${safe(e.details)}")) count++ } }
         return count
     }
@@ -178,6 +180,7 @@ object XlsxExport {
         sales: List<SaleEntity>,
         saleLines: List<SaleLineEntity>,
         saleReturns: List<SaleReturnEntity>,
+        creditNotes: List<CreditNoteEntity>,
         customers: List<CustomerEntity>,
         expenses: List<ExpenseEntity>,
         summary: FinanceSummary
@@ -216,11 +219,37 @@ object XlsxExport {
             val notes = listOf(itemsNote, s.notes).filter { it.isNotBlank() }.joinToString(" | ")
             saleRows += listOf(saleRows.size + 1, s.invoiceNo, editDate(s.saleDateEpochDay), customerMap[s.customerId]?.companyName.orEmpty(), s.netPence / 100.0, s.vatPence / 100.0, s.grossPence / 100.0, if (s.vatType == VatTypes.REVERSE) s.reverseVatPence / 100.0 else null, notes)
         }
-        saleReturns.forEach { r ->
+        val creditById = creditNotes.associateBy { it.id }
+        creditNotes.sortedWith(compareBy<CreditNoteEntity> { it.creditDateEpochDay }.thenBy { it.id }).forEach { credit ->
+            val sale = saleById[credit.saleId] ?: return@forEach
+            val rows = saleReturns.filter { it.creditNoteId == credit.id }
+            val items = rows.mapNotNull { returned ->
+                val line = lineById[returned.saleLineId] ?: return@mapNotNull null
+                "${line.item} x${returned.quantity}"
+            }.joinToString(", ")
+            val restockText = when {
+                rows.isEmpty() -> ""
+                rows.all { it.restock } -> " | Restocked: Yes"
+                rows.none { it.restock } -> " | Restocked: No"
+                else -> " | Restocked: Mixed"
+            }
+            saleRows += listOf(
+                saleRows.size + 1,
+                credit.creditNoteNo,
+                editDate(credit.creditDateEpochDay),
+                customerMap[sale.customerId]?.companyName.orEmpty(),
+                -credit.netPence / 100.0,
+                -credit.vatPence / 100.0,
+                -credit.grossPence / 100.0,
+                if (credit.reverseVatPence > 0) -credit.reverseVatPence / 100.0 else null,
+                "CREDIT NOTE against ${sale.invoiceNo}: $items$restockText${if (credit.notes.isNotBlank()) " | ${credit.notes}" else ""}"
+            )
+        }
+        saleReturns.filter { it.creditNoteId == 0L || it.creditNoteId !in creditById }.forEach { r ->
             val line = lineById[r.saleLineId] ?: return@forEach
             val sale = saleById[line.saleId] ?: return@forEach
             val reverse = if (sale.vatType == VatTypes.REVERSE) breakdownFromGross(r.refundGrossPence, sale.vatType).reverseVatPence else 0
-            saleRows += listOf(saleRows.size + 1, "${sale.invoiceNo}-RET${r.id}", editDate(r.returnDateEpochDay), customerMap[sale.customerId]?.companyName.orEmpty(), -r.refundNetPence / 100.0, -r.refundVatPence / 100.0, -r.refundGrossPence / 100.0, if (reverse > 0) -reverse / 100.0 else null, "CUSTOMER RETURN: ${line.item} x${r.quantity} | Restocked: ${if (r.restock) "Yes" else "No"}${if (r.notes.isNotBlank()) " | ${r.notes}" else ""}")
+            saleRows += listOf(saleRows.size + 1, "${sale.invoiceNo}-RET${r.id}", editDate(r.returnDateEpochDay), customerMap[sale.customerId]?.companyName.orEmpty(), -r.refundNetPence / 100.0, -r.refundVatPence / 100.0, -r.refundGrossPence / 100.0, if (reverse > 0) -reverse / 100.0 else null, "LEGACY CUSTOMER RETURN: ${line.item} x${r.quantity} | Restocked: ${if (r.restock) "Yes" else "No"}${if (r.notes.isNotBlank()) " | ${r.notes}" else ""}")
         }
 
         val expHeaders = listOf("NO", "STORE", "DATE", "DETAILS", "Account", "vat", "TOTAL", "Vatable?", "Comments")

@@ -214,7 +214,7 @@ fun ImeiSelectionOverlay() {
     )
 }
 
-private const val WHATS_NEW_VERSION = "2026-09-09-imei-allocation-v1"
+private const val WHATS_NEW_VERSION = "2026-10-01-credit-notes-v1"
 
 @Composable
 fun WhatsNewNotice() {
@@ -236,12 +236,12 @@ fun WhatsNewNotice() {
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("September 2026 update", fontWeight = FontWeight.Bold)
-                Text("• IMEI / serial tracking now recognises one identifier per line in the existing purchase textbox.")
-                Text("• When a sale leaves some of the same item in stock, the app asks which IMEIs are being sold so the correct identifiers appear on that customer’s invoice.")
-                Text("• When the entire remaining stock of that item is sold, no extra step is required — all available identifiers are used automatically.")
-                Text("• Sales invoices now show Unit Net and Total Net with clearer separation between multiple products.")
-                Text("• Duplicate reverse-charge notices at the bottom of reverse VAT invoices have been removed; the reverse-charge notice at the top remains.")
+                Text("October 2026 update", fontWeight = FontWeight.Bold)
+                Text("• Issue full or partial credit notes directly from a sales invoice, including multiple item lines on one credit note.")
+                Text("• IMEI / serial-tracked sales require the exact returned identifier to be selected before the credit note is issued.")
+                Text("• Restocked credit-note items automatically return to inventory and profit/VAT figures update immediately.")
+                Text("• Credit notes appear in Sales, generate their own CN-000001 style PDF, sync to Dropbox and export to the SALES worksheet as negative entries.")
+                Text("• Purchase orders can now be deleted when none of their stock has sales history; deleted purchases disappear from future Excel exports.")
             }
         },
         confirmButton = {
