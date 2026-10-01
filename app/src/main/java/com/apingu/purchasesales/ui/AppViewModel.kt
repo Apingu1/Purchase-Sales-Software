@@ -159,6 +159,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
         val allAllocations = dao.getSaleAllocations()
         val allReturnAllocations = dao.getSaleReturnAllocations()
         val allReturns = dao.getSaleReturns()
+        val allCreditImeis = dao.getCreditNoteImeis()
         val currentLines = if (value.id > 0) dao.getSaleLinesForSale(value.id) else emptyList()
         val currentLineIds = currentLines.map { it.id }.toSet()
 
@@ -171,15 +172,24 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
             }
         }
 
-        val restockedByLine = allReturns.filter { it.restock && it.saleLineId !in currentLineIds }
+        val restockedReturns = allReturns.filter { it.restock && it.saleLineId !in currentLineIds }
+        val restockedByLine = restockedReturns
             .groupBy { it.saleLineId }
             .mapValues { (_, rows) -> rows.sumOf { it.quantity } }
+        val restockedReturnIds = restockedReturns.map { it.id }.toSet()
+        val exactRestockedByLine = allCreditImeis
+            .filter { it.saleReturnId in restockedReturnIds }
+            .groupBy { it.saleLineId }
+            .mapValues { (_, rows) -> rows.map { it.identifier }.toSet() }
 
         val exactUsedIdentifiers = mutableSetOf<String>()
         dao.getSaleLines().filter { it.id !in currentLineIds }.forEach { line ->
             val assigned = ImeiAssignmentStore.get(context, line.id)
-            val restocked = (restockedByLine[line.id] ?: 0).coerceAtMost(assigned.size)
-            exactUsedIdentifiers += if (restocked > 0) assigned.dropLast(restocked) else assigned
+            val exactRestocked = exactRestockedByLine[line.id].orEmpty()
+            val remainingAssigned = assigned.filter { it !in exactRestocked }
+            val totalRestocked = (restockedByLine[line.id] ?: 0).coerceAtMost(assigned.size)
+            val legacyRestocked = (totalRestocked - exactRestocked.size).coerceAtLeast(0).coerceAtMost(remainingAssigned.size)
+            exactUsedIdentifiers += if (legacyRestocked > 0) remainingAssigned.dropLast(legacyRestocked) else remainingAssigned
         }
 
         val candidatesByItem = mutableMapOf<String, MutableList<ImeiCandidate>>()
