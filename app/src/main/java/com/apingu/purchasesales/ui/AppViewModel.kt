@@ -26,8 +26,10 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     val sales = repo.sales.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val saleLines = repo.saleLines.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val allocations = repo.allocations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val creditNotes = repo.creditNotes.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val saleReturns = repo.saleReturns.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val returnAllocations = repo.returnAllocations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val creditNoteImeis = repo.creditNoteImeis.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val expenses = repo.expenses.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val selectedAccountingPeriod = combine(business, accountingPeriods) { b, periods ->
@@ -93,6 +95,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     }
 
     fun markReceivedAllOrder(orderId: Long) = action("Purchase received") { repo.markReceivedAllOrder(orderId) }
+    fun deletePurchaseOrder(orderId: Long) = action("Purchase deleted") { repo.deletePurchaseOrder(orderId) }
 
     fun savePurchase(value: PurchaseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) = action("Purchase saved", onSuccess) { repo.savePurchase(value, attachmentUri) }
     fun markReceivedAll(value: PurchaseEntity) = action("Purchase received") { repo.markReceivedAll(value) }
@@ -327,6 +330,18 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
         dao.updateSale(sale.copy(pdfPath = pdfPath, updatedAtMillis = System.currentTimeMillis()))
     }
 
+    fun issueCreditNote(value: CreditNoteDraft, onSuccess: () -> Unit = {}) =
+        action("Credit note issued", onSuccess) { repo.issueCreditNote(value) }
+
+    fun exportCreditNote(creditNoteId: Long, uri: Uri) = action("Credit note downloaded") {
+        val credit = dao.getCreditNote(creditNoteId) ?: error("Credit note not found")
+        val source = credit.pdfPath?.let(::File)?.takeIf { it.exists() } ?: error("Credit note PDF is not available")
+        context.contentResolver.openOutputStream(uri).use { out ->
+            requireNotNull(out) { "Unable to open download location" }
+            source.inputStream().use { it.copyTo(out) }
+        }
+    }
+
     fun recordReturn(lineId: Long, day: Long, qty: Int, restock: Boolean, notes: String, onSuccess: () -> Unit = {}) = action("Customer return recorded", onSuccess) { repo.recordCustomerReturn(lineId, day, qty, restock, notes) }
     fun saveExpense(value: ExpenseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) = action("Expense saved", onSuccess) { repo.saveExpense(value, attachmentUri) }
     fun syncNow() = action("Dropbox sync queued") { repo.enqueueSync() }
@@ -342,6 +357,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
             data.sales.filter { it.saleDateEpochDay in period.startEpochDay..period.endEpochDay },
             data.saleLines,
             data.saleReturns.filter { it.returnDateEpochDay in period.startEpochDay..period.endEpochDay },
+            data.creditNotes.filter { it.creditDateEpochDay in period.startEpochDay..period.endEpochDay },
             data.customers,
             data.expenses.filter { it.expenseDateEpochDay in period.startEpochDay..period.endEpochDay },
             summary
@@ -351,7 +367,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
 
     fun exportDocuments(treeUri: Uri) = action("Documents exported") {
         val d = repo.getFullData()
-        val count = DocumentStore.exportAllDocuments(context, treeUri, d.purchases, d.sales, d.expenses)
+        val count = DocumentStore.exportAllDocuments(context, treeUri, d.purchases, d.sales, d.creditNotes, d.expenses)
         _message.value = "$count documents exported"
     }
 
