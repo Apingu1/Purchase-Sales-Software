@@ -269,15 +269,18 @@ interface AppDao {
     @Query("SELECT * FROM sale_returns WHERE creditNoteId = :creditNoteId ORDER BY id") suspend fun getSaleReturnsForCreditNote(creditNoteId: Long): List<SaleReturnEntity>
     @Query("SELECT COUNT(*) FROM sale_returns WHERE saleLineId IN (SELECT id FROM sale_lines WHERE saleId = :saleId)") suspend fun countReturnsForSale(saleId: Long): Int
     @Insert suspend fun insertSaleReturn(value: SaleReturnEntity): Long
+    @Query("DELETE FROM sale_returns WHERE creditNoteId = :creditNoteId") suspend fun deleteSaleReturnsForCreditNote(creditNoteId: Long)
 
     @Query("SELECT * FROM sale_return_allocations ORDER BY id") fun observeSaleReturnAllocations(): Flow<List<SaleReturnAllocationEntity>>
     @Query("SELECT * FROM sale_return_allocations ORDER BY id") suspend fun getSaleReturnAllocations(): List<SaleReturnAllocationEntity>
     @Insert suspend fun insertSaleReturnAllocation(value: SaleReturnAllocationEntity)
+    @Query("DELETE FROM sale_return_allocations WHERE saleReturnId IN (SELECT id FROM sale_returns WHERE creditNoteId = :creditNoteId)") suspend fun deleteReturnAllocationsForCreditNote(creditNoteId: Long)
 
     @Query("SELECT * FROM credit_note_imeis ORDER BY id") fun observeCreditNoteImeis(): Flow<List<CreditNoteImeiEntity>>
     @Query("SELECT * FROM credit_note_imeis ORDER BY id") suspend fun getCreditNoteImeis(): List<CreditNoteImeiEntity>
     @Query("SELECT * FROM credit_note_imeis WHERE creditNoteId = :creditNoteId ORDER BY id") suspend fun getCreditNoteImeisForCreditNote(creditNoteId: Long): List<CreditNoteImeiEntity>
     @Insert suspend fun insertCreditNoteImei(value: CreditNoteImeiEntity): Long
+    @Query("DELETE FROM credit_note_imeis WHERE creditNoteId = :creditNoteId") suspend fun deleteCreditNoteImeisForCreditNote(creditNoteId: Long)
 
     @Query("SELECT * FROM expenses ORDER BY expenseDateEpochDay DESC, id DESC") fun observeExpenses(): Flow<List<ExpenseEntity>>
     @Query("SELECT * FROM expenses ORDER BY expenseDateEpochDay ASC, id ASC") suspend fun getExpenses(): List<ExpenseEntity>
