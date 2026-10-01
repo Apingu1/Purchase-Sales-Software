@@ -107,7 +107,8 @@ private fun AppNavigationV3(nav: NavHostController, vm: AppViewModel) {
             composable("sales") { SalesScreen(vm, nav) }
             composable("sale/new") { SaleEditor(vm, nav, 0L) }
             composable("sale/{id}") { SaleEditor(vm, nav, it.arguments?.getString("id")?.toLongOrNull() ?: 0L) }
-            composable("credit-note/{saleId}") { CreditNoteEditor(vm, nav, it.arguments?.getString("saleId")?.toLongOrNull() ?: 0L) }
+            composable("credit-note/{saleId}") { CreditNoteEditor(vm, nav, saleId = it.arguments?.getString("saleId")?.toLongOrNull() ?: 0L) }
+            composable("credit-note/edit/{creditNoteId}") { CreditNoteEditor(vm, nav, creditNoteId = it.arguments?.getString("creditNoteId")?.toLongOrNull() ?: 0L) }
             composable("more") { MoreScreen(nav) }
             composable("customers") { CustomersScreen(vm, nav) }
             composable("expenses") { ExpensesScreen(vm, nav) }
