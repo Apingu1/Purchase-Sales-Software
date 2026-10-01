@@ -131,10 +131,29 @@ data class SaleAllocationEntity(
     val unitNetCostPence: Long
 )
 
-@Entity(tableName = "sale_returns", indices = [Index("saleLineId")])
+@Entity(
+    tableName = "credit_notes",
+    indices = [Index("saleId"), Index(value = ["creditNoteNo"], unique = true)]
+)
+data class CreditNoteEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val creditNoteNo: String,
+    val saleId: Long,
+    val creditDateEpochDay: Long,
+    val netPence: Long,
+    val vatPence: Long,
+    val grossPence: Long,
+    val reverseVatPence: Long,
+    val notes: String = "",
+    val pdfPath: String? = null,
+    val updatedAtMillis: Long = System.currentTimeMillis()
+)
+
+@Entity(tableName = "sale_returns", indices = [Index("saleLineId"), Index("creditNoteId")])
 data class SaleReturnEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val saleLineId: Long,
+    @ColumnInfo(defaultValue = "0") val creditNoteId: Long = 0,
     val returnDateEpochDay: Long,
     val quantity: Int,
     val refundGrossPence: Long,
@@ -150,6 +169,19 @@ data class SaleReturnAllocationEntity(
     val saleReturnId: Long,
     val saleAllocationId: Long,
     val quantity: Int
+)
+
+@Entity(
+    tableName = "credit_note_imeis",
+    indices = [Index("creditNoteId"), Index("saleReturnId"), Index("saleLineId")]
+)
+data class CreditNoteImeiEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val creditNoteId: Long,
+    val saleReturnId: Long,
+    val saleLineId: Long,
+    val identifier: String,
+    @ColumnInfo(defaultValue = "0") val purchaseId: Long = 0
 )
 
 @Entity(tableName = "expenses")
@@ -225,14 +257,27 @@ interface AppDao {
     @Query("DELETE FROM sale_allocations WHERE saleLineId IN (SELECT id FROM sale_lines WHERE saleId = :saleId)") suspend fun deleteAllocationsForSale(saleId: Long)
     @Query("UPDATE sale_allocations SET unitNetCostPence = :unitCostPence WHERE purchaseId = :purchaseId") suspend fun updateAllocationUnitCostForPurchase(purchaseId: Long, unitCostPence: Long)
 
+    @Query("SELECT * FROM credit_notes ORDER BY creditDateEpochDay DESC, id DESC") fun observeCreditNotes(): Flow<List<CreditNoteEntity>>
+    @Query("SELECT * FROM credit_notes ORDER BY id") suspend fun getCreditNotes(): List<CreditNoteEntity>
+    @Query("SELECT * FROM credit_notes WHERE id = :id") suspend fun getCreditNote(id: Long): CreditNoteEntity?
+    @Query("SELECT * FROM credit_notes WHERE saleId = :saleId ORDER BY id") suspend fun getCreditNotesForSale(saleId: Long): List<CreditNoteEntity>
+    @Insert suspend fun insertCreditNote(value: CreditNoteEntity): Long
+    @Update suspend fun updateCreditNote(value: CreditNoteEntity)
+
     @Query("SELECT * FROM sale_returns ORDER BY returnDateEpochDay DESC, id DESC") fun observeSaleReturns(): Flow<List<SaleReturnEntity>>
     @Query("SELECT * FROM sale_returns ORDER BY id") suspend fun getSaleReturns(): List<SaleReturnEntity>
+    @Query("SELECT * FROM sale_returns WHERE creditNoteId = :creditNoteId ORDER BY id") suspend fun getSaleReturnsForCreditNote(creditNoteId: Long): List<SaleReturnEntity>
     @Query("SELECT COUNT(*) FROM sale_returns WHERE saleLineId IN (SELECT id FROM sale_lines WHERE saleId = :saleId)") suspend fun countReturnsForSale(saleId: Long): Int
     @Insert suspend fun insertSaleReturn(value: SaleReturnEntity): Long
 
     @Query("SELECT * FROM sale_return_allocations ORDER BY id") fun observeSaleReturnAllocations(): Flow<List<SaleReturnAllocationEntity>>
     @Query("SELECT * FROM sale_return_allocations ORDER BY id") suspend fun getSaleReturnAllocations(): List<SaleReturnAllocationEntity>
     @Insert suspend fun insertSaleReturnAllocation(value: SaleReturnAllocationEntity)
+
+    @Query("SELECT * FROM credit_note_imeis ORDER BY id") fun observeCreditNoteImeis(): Flow<List<CreditNoteImeiEntity>>
+    @Query("SELECT * FROM credit_note_imeis ORDER BY id") suspend fun getCreditNoteImeis(): List<CreditNoteImeiEntity>
+    @Query("SELECT * FROM credit_note_imeis WHERE creditNoteId = :creditNoteId ORDER BY id") suspend fun getCreditNoteImeisForCreditNote(creditNoteId: Long): List<CreditNoteImeiEntity>
+    @Insert suspend fun insertCreditNoteImei(value: CreditNoteImeiEntity): Long
 
     @Query("SELECT * FROM expenses ORDER BY expenseDateEpochDay DESC, id DESC") fun observeExpenses(): Flow<List<ExpenseEntity>>
     @Query("SELECT * FROM expenses ORDER BY expenseDateEpochDay ASC, id ASC") suspend fun getExpenses(): List<ExpenseEntity>
@@ -245,10 +290,10 @@ interface AppDao {
     entities = [
         BusinessEntity::class, AccountingPeriodEntity::class, CustomerEntity::class,
         PurchaseOrderEntity::class, PurchaseEntity::class, SaleEntity::class, SaleLineEntity::class,
-        SaleAllocationEntity::class, SaleReturnEntity::class, SaleReturnAllocationEntity::class,
-        ExpenseEntity::class
+        SaleAllocationEntity::class, CreditNoteEntity::class, SaleReturnEntity::class, SaleReturnAllocationEntity::class,
+        CreditNoteImeiEntity::class, ExpenseEntity::class
     ],
-    version = 4,
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -316,10 +361,47 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `credit_notes` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `creditNoteNo` TEXT NOT NULL,
+                        `saleId` INTEGER NOT NULL,
+                        `creditDateEpochDay` INTEGER NOT NULL,
+                        `netPence` INTEGER NOT NULL,
+                        `vatPence` INTEGER NOT NULL,
+                        `grossPence` INTEGER NOT NULL,
+                        `reverseVatPence` INTEGER NOT NULL,
+                        `notes` TEXT NOT NULL,
+                        `pdfPath` TEXT,
+                        `updatedAtMillis` INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_credit_notes_saleId` ON `credit_notes` (`saleId`)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_credit_notes_creditNoteNo` ON `credit_notes` (`creditNoteNo`)")
+                db.execSQL("ALTER TABLE `sale_returns` ADD COLUMN `creditNoteId` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_sale_returns_creditNoteId` ON `sale_returns` (`creditNoteId`)")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `credit_note_imeis` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `creditNoteId` INTEGER NOT NULL,
+                        `saleReturnId` INTEGER NOT NULL,
+                        `saleLineId` INTEGER NOT NULL,
+                        `identifier` TEXT NOT NULL,
+                        `purchaseId` INTEGER NOT NULL DEFAULT 0
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_credit_note_imeis_creditNoteId` ON `credit_note_imeis` (`creditNoteId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_credit_note_imeis_saleReturnId` ON `credit_note_imeis` (`saleReturnId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_credit_note_imeis_saleLineId` ON `credit_note_imeis` (`saleLineId`)")
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder(
             context.applicationContext,
             AppDatabase::class.java,
             "purchase-sales.db"
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).fallbackToDestructiveMigration().build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).fallbackToDestructiveMigration().build()
     }
 }
