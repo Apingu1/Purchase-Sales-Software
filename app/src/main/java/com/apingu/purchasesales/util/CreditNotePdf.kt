@@ -93,8 +93,7 @@ object CreditNotePdf {
                 text("IMEI / serial:", 48f, y, 8f, true); y += 11f
                 line.identifiers.forEach { id -> text(id.take(72), 58f, y, 8f); y += 11f }
             }
-            text("Return to inventory: ${if (line.restock) "Yes" else "No"}", 48f, y, 8f)
-            y += 12f
+            y += 4f
             if (index < lines.lastIndex) { canvas.drawLine(40f, y, 555f, y, paint); y += 12f }
         }
 
