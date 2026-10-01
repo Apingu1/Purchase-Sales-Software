@@ -12,6 +12,11 @@ data class PendingPurchaseInvoiceDeletion(
     val fileName: String
 )
 
+data class PendingCreditNoteDeletion(
+    val creditDateEpochDay: Long,
+    val creditNoteNo: String
+)
+
 /**
  * Persists Dropbox sales-invoice deletions until the next successful sync. This means a sales
  * invoice can be deleted while Dropbox is disabled/offline and the stale cloud copy will still be
@@ -21,6 +26,7 @@ object DropboxDeletionQueue {
     private const val PREFS = "dropbox_deletion_queue"
     private const val KEY_SALES = "sales_invoice_deletions"
     private const val KEY_PURCHASES = "purchase_invoice_deletions"
+    private const val KEY_CREDIT_NOTES = "credit_note_deletions"
 
     @Synchronized
     fun enqueueSale(context: Context, saleDateEpochDay: Long, invoiceNo: String) {
@@ -68,6 +74,34 @@ object DropboxDeletionQueue {
         val values = prefs.getStringSet(KEY_PURCHASES, emptySet()).orEmpty().toMutableSet()
         completed.forEach { values.remove("${it.purchaseDateEpochDay}\t${it.fileName}") }
         prefs.edit().putStringSet(KEY_PURCHASES, values).apply()
+    }
+
+    @Synchronized
+    fun enqueueCreditNote(context: Context, creditDateEpochDay: Long, creditNoteNo: String) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val values = prefs.getStringSet(KEY_CREDIT_NOTES, emptySet()).orEmpty().toMutableSet()
+        values += "${creditDateEpochDay}\t${creditNoteNo}"
+        prefs.edit().putStringSet(KEY_CREDIT_NOTES, values).apply()
+    }
+
+    fun pendingCreditNotes(context: Context): List<PendingCreditNoteDeletion> {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return prefs.getStringSet(KEY_CREDIT_NOTES, emptySet()).orEmpty().mapNotNull { raw ->
+            val split = raw.indexOf('\t')
+            if (split <= 0 || split >= raw.lastIndex) null
+            else raw.substring(0, split).toLongOrNull()?.let {
+                PendingCreditNoteDeletion(it, raw.substring(split + 1))
+            }
+        }
+    }
+
+    @Synchronized
+    fun removeCreditNotes(context: Context, completed: Collection<PendingCreditNoteDeletion>) {
+        if (completed.isEmpty()) return
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val values = prefs.getStringSet(KEY_CREDIT_NOTES, emptySet()).orEmpty().toMutableSet()
+        completed.forEach { values.remove("${it.creditDateEpochDay}\t${it.creditNoteNo}") }
+        prefs.edit().putStringSet(KEY_CREDIT_NOTES, values).apply()
     }
 
     private fun encode(value: PendingSaleInvoiceDeletion): String =
