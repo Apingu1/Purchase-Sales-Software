@@ -340,8 +340,10 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
         dao.updateSale(sale.copy(pdfPath = pdfPath, updatedAtMillis = System.currentTimeMillis()))
     }
 
-    fun issueCreditNote(value: CreditNoteDraft, onSuccess: () -> Unit = {}) =
-        action("Credit note issued", onSuccess) { repo.issueCreditNote(value) }
+    fun saveCreditNote(value: CreditNoteDraft, onSuccess: () -> Unit = {}) =
+        action(if (value.id > 0) "Credit note updated" else "Credit note issued", onSuccess) {
+            repo.saveCreditNote(value)
+        }
 
     fun exportCreditNote(creditNoteId: Long, uri: Uri) = action("Credit note downloaded") {
         val credit = dao.getCreditNote(creditNoteId) ?: error("Credit note not found")
