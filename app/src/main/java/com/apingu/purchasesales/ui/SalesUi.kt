@@ -27,19 +27,34 @@ import com.apingu.purchasesales.util.*
 @Composable
 fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
     val allSales by vm.sales.collectAsStateWithLifecycle()
+    val allCreditNotes by vm.creditNotes.collectAsStateWithLifecycle()
     val period by vm.selectedAccountingPeriod.collectAsStateWithLifecycle()
     val customers by vm.customers.collectAsStateWithLifecycle()
     val lines by vm.saleLines.collectAsStateWithLifecycle()
-    var returnSale by remember { mutableStateOf<SaleEntity?>(null) }
     var deleteSale by remember { mutableStateOf<SaleEntity?>(null) }
     var downloadSale by remember { mutableStateOf<SaleEntity?>(null) }
+    var downloadCredit by remember { mutableStateOf<CreditNoteEntity?>(null) }
+
     val invoiceDownloadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
         val selected = downloadSale
         if (uri != null && selected != null) vm.exportSaleInvoice(selected.id, uri)
         downloadSale = null
     }
+    val creditDownloadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
+        val selected = downloadCredit
+        if (uri != null && selected != null) vm.exportCreditNote(selected.id, uri)
+        downloadCredit = null
+    }
+
     val customerMap = customers.associateBy { it.id }
     val sales = if (period == null) emptyList() else allSales.filter { it.saleDateEpochDay in period!!.startEpochDay..period!!.endEpochDay }
+    val credits = if (period == null) emptyList() else allCreditNotes.filter { it.creditDateEpochDay in period!!.startEpochDay..period!!.endEpochDay }
+    val saleMap = allSales.associateBy { it.id }
+
+    data class LedgerRow(val day: Long, val sortId: Long, val sale: SaleEntity? = null, val credit: CreditNoteEntity? = null)
+    val ledger = (sales.map { LedgerRow(it.saleDateEpochDay, it.id, sale = it) } +
+        credits.map { LedgerRow(it.creditDateEpochDay, it.id, credit = it) })
+        .sortedWith(compareByDescending<LedgerRow> { it.day }.thenByDescending { it.sortId })
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("Sales") }) },
@@ -49,61 +64,88 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
     ) { inner ->
         Column(Modifier.padding(inner)) {
             AccountingPeriodSelector(vm, Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
-            if (sales.isEmpty()) {
+            if (ledger.isEmpty()) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    EmptyState("No sales invoices in this accounting period")
+                    EmptyState("No sales invoices or credit notes in this accounting period")
                 }
             } else {
                 LazyColumn(
                     contentPadding = PaddingValues(12.dp),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    items(sales, key = { it.id }) { sale ->
-                        val saleItems = lines.filter { it.saleId == sale.id }
-                        val totalQty = saleItems.sumOf { it.quantity }
-                        val itemSummary = when {
-                            saleItems.isEmpty() -> "No item lines"
-                            saleItems.size == 1 -> "${saleItems.first().item} × ${saleItems.first().quantity}"
-                            else -> {
-                                val firstTwo = saleItems.take(2).joinToString(" • ") { "${it.item} × ${it.quantity}" }
-                                if (saleItems.size > 2) "$firstTwo • +${saleItems.size - 2} more" else firstTwo
-                            }
-                        }
-                        ElevatedCard(Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Row(Modifier.fillMaxWidth()) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text(sale.invoiceNo, fontWeight = FontWeight.Bold)
-                                        Text(customerMap[sale.customerId]?.companyName ?: "Customer", style = MaterialTheme.typography.bodySmall)
-                                    }
-                                    Text(formatMoney(sale.grossPence), fontWeight = FontWeight.Bold)
+                    items(ledger, key = { row -> if (row.sale != null) "S-${row.sale.id}" else "C-${row.credit!!.id}" }) { row ->
+                        val sale = row.sale
+                        val credit = row.credit
+                        if (sale != null) {
+                            val saleItems = lines.filter { it.saleId == sale.id }
+                            val totalQty = saleItems.sumOf { it.quantity }
+                            val itemSummary = when {
+                                saleItems.isEmpty() -> "No item lines"
+                                saleItems.size == 1 -> "${saleItems.first().item} × ${saleItems.first().quantity}"
+                                else -> {
+                                    val firstTwo = saleItems.take(2).joinToString(" • ") { "${it.item} × ${it.quantity}" }
+                                    if (saleItems.size > 2) "$firstTwo • +${saleItems.size - 2} more" else firstTwo
                                 }
-                                Text(itemSummary, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    "${saleItems.size} item line${if (saleItems.size == 1) "" else "s"} • $totalQty units • ${displayDate(sale.saleDateEpochDay)} • ${VatTypes.label(sale.vatType)}",
-                                    style = MaterialTheme.typography.bodySmall
-                                )
-                                Row {
-                                    TextButton({ nav.navigate("sale/${sale.id}") }) {
-                                        Icon(Icons.Default.Edit, null)
-                                        Text(" Edit")
+                            }
+                            ElevatedCard(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                    Row(Modifier.fillMaxWidth()) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(sale.invoiceNo, fontWeight = FontWeight.Bold)
+                                            Text(customerMap[sale.customerId]?.companyName ?: "Customer", style = MaterialTheme.typography.bodySmall)
+                                        }
+                                        Text(formatMoney(sale.grossPence), fontWeight = FontWeight.Bold)
                                     }
+                                    Text(itemSummary, style = MaterialTheme.typography.bodyMedium)
+                                    Text(
+                                        "${saleItems.size} item line${if (saleItems.size == 1) "" else "s"} • $totalQty units • ${displayDate(sale.saleDateEpochDay)} • ${VatTypes.label(sale.vatType)}",
+                                        style = MaterialTheme.typography.bodySmall
+                                    )
+                                    Row {
+                                        TextButton({ nav.navigate("sale/${sale.id}") }) {
+                                            Icon(Icons.Default.Edit, null)
+                                            Text(" Edit")
+                                        }
+                                        TextButton({
+                                            downloadSale = sale
+                                            invoiceDownloadLauncher.launch("${sale.invoiceNo}.pdf")
+                                        }) {
+                                            Icon(Icons.Default.Download, null)
+                                            Text(" Download PDF")
+                                        }
+                                    }
+                                    Row {
+                                        TextButton({ nav.navigate("credit-note/${sale.id}") }) {
+                                            Icon(Icons.Default.KeyboardReturn, null)
+                                            Text(" Issue credit note")
+                                        }
+                                        TextButton({ deleteSale = sale }) {
+                                            Icon(Icons.Default.DeleteOutline, null)
+                                            Text(" Delete invoice")
+                                        }
+                                    }
+                                }
+                            }
+                        } else if (credit != null) {
+                            val original = saleMap[credit.saleId]
+                            ElevatedCard(Modifier.fillMaxWidth()) {
+                                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                        Column(Modifier.weight(1f)) {
+                                            Text(credit.creditNoteNo, fontWeight = FontWeight.Bold)
+                                            Text("CREDIT NOTE", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.primary)
+                                        }
+                                        Text("-${formatMoney(credit.grossPence)}", fontWeight = FontWeight.Bold)
+                                    }
+                                    Text(customerMap[original?.customerId]?.companyName ?: "Customer", style = MaterialTheme.typography.bodySmall)
+                                    Text("Against ${original?.invoiceNo ?: "sales invoice"} • ${displayDate(credit.creditDateEpochDay)}", style = MaterialTheme.typography.bodySmall)
+                                    if (credit.notes.isNotBlank()) Text(credit.notes, style = MaterialTheme.typography.bodySmall)
                                     TextButton({
-                                        downloadSale = sale
-                                        invoiceDownloadLauncher.launch("${sale.invoiceNo}.pdf")
+                                        downloadCredit = credit
+                                        creditDownloadLauncher.launch("${credit.creditNoteNo}.pdf")
                                     }) {
                                         Icon(Icons.Default.Download, null)
-                                        Text(" Download PDF")
-                                    }
-                                }
-                                Row {
-                                    TextButton({ returnSale = sale }) {
-                                        Icon(Icons.Default.KeyboardReturn, null)
-                                        Text(" Return/refund")
-                                    }
-                                    TextButton({ deleteSale = sale }) {
-                                        Icon(Icons.Default.DeleteOutline, null)
-                                        Text(" Delete invoice")
+                                        Text(" Download credit note")
                                     }
                                 }
                             }
@@ -114,15 +156,13 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
             }
         }
     }
-    returnSale?.let { sale ->
-        CustomerReturnDialog(vm, sale, lines.filter { it.saleId == sale.id }) { returnSale = null }
-    }
+
     deleteSale?.let { sale ->
         AlertDialog(
             onDismissRequest = { deleteSale = null },
             title = { Text("Delete ${sale.invoiceNo}?") },
             text = {
-                Text("This permanently removes the sales invoice, its sale lines and any recorded customer returns. Stock allocations are removed so inventory is restored as though this sale had not been recorded. If Dropbox sync is used, the cloud PDF is queued for removal too.")
+                Text("This permanently removes the invoice only when it has no credit-note history. If a credit note has been issued, the original invoice is retained for traceability.")
             },
             confirmButton = {
                 TextButton(onClick = {
@@ -383,6 +423,202 @@ private fun SaleLineCard(
                     else -> Text("Line net ${formatMoney(lineBreakdown.netPence)} • No VAT", style = MaterialTheme.typography.bodySmall)
                 }
             }
+        }
+    }
+}
+
+
+private data class CreditLineForm(
+    val saleLineId: Long,
+    val quantity: String = "0",
+    val restock: Boolean = true,
+    val selectedIdentifiers: Set<String> = emptySet()
+)
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun CreditNoteEditor(vm: AppViewModel, nav: NavHostController, saleId: Long) {
+    val context = LocalContext.current
+    val sales by vm.sales.collectAsStateWithLifecycle()
+    val allLines by vm.saleLines.collectAsStateWithLifecycle()
+    val returns by vm.saleReturns.collectAsStateWithLifecycle()
+    val creditedImeis by vm.creditNoteImeis.collectAsStateWithLifecycle()
+    val allocations by vm.allocations.collectAsStateWithLifecycle()
+    val purchases by vm.purchases.collectAsStateWithLifecycle()
+    val purchaseOrders by vm.purchaseOrders.collectAsStateWithLifecycle()
+    val customers by vm.customers.collectAsStateWithLifecycle()
+
+    val sale = sales.firstOrNull { it.id == saleId }
+    if (sale == null) {
+        LoadingScreen()
+        return
+    }
+    val lines = allLines.filter { it.saleId == saleId }
+    val customer = customers.firstOrNull { it.id == sale.customerId }
+    val orderMap = purchaseOrders.associateBy { it.id }
+    val purchaseMap = purchases.associateBy { it.id }
+    val forms = remember(saleId, lines.size) {
+        mutableStateListOf<CreditLineForm>().apply {
+            lines.forEach { add(CreditLineForm(it.id)) }
+        }
+    }
+
+    var date by remember(saleId) { mutableStateOf(editDate(epochDayToday())) }
+    var notes by remember(saleId) { mutableStateOf("") }
+
+    fun assignedUnits(line: SaleLineEntity): List<CreditNoteUnitDraft> {
+        val alreadyCredited = creditedImeis.filter { it.saleLineId == line.id }.map { it.identifier }.toSet()
+        val assigned = ImeiAssignmentStore.get(context, line.id).filter { it !in alreadyCredited }
+        val lineAllocations = allocations.filter { it.saleLineId == line.id }
+        return assigned.map { identifier ->
+            val exactPurchase = lineAllocations.asSequence()
+                .mapNotNull { purchaseMap[it.purchaseId] }
+                .firstOrNull { purchase ->
+                    identifier in trackedIdentifiers(purchase, orderMap[purchase.purchaseOrderId]?.notes.orEmpty())
+                }
+            CreditNoteUnitDraft(identifier, exactPurchase?.id ?: 0L)
+        }
+    }
+
+    val validity = forms.all { form ->
+        val line = lines.first { it.id == form.saleLineId }
+        val alreadyReturned = returns.filter { it.saleLineId == line.id }.sumOf { it.quantity }
+        val availableQty = (line.quantity - alreadyReturned).coerceAtLeast(0)
+        val qty = form.quantity.toIntOrNull() ?: 0
+        val tracked = assignedUnits(line)
+        qty in 0..availableQty && (qty <= 0 || tracked.isEmpty() || form.selectedIdentifiers.size == qty)
+    }
+    val anySelected = forms.any { (it.quantity.toIntOrNull() ?: 0) > 0 }
+
+    ScreenScaffold("Issue credit note", onBack = { nav.popBackStack() }) { inner ->
+        Column(
+            Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            ElevatedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Original invoice ${sale.invoiceNo}", fontWeight = FontWeight.Bold)
+                    Text(customer?.companyName ?: "Customer")
+                    Text("Select only the item(s) being returned or credited. The original invoice remains unchanged.", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            FormField("Credit note date (DD/MM/YYYY)", date, { date = it })
+
+            lines.forEach { line ->
+                val index = forms.indexOfFirst { it.saleLineId == line.id }
+                val form = forms[index]
+                val alreadyReturned = returns.filter { it.saleLineId == line.id }.sumOf { it.quantity }
+                val availableQty = (line.quantity - alreadyReturned).coerceAtLeast(0)
+                val qty = form.quantity.toIntOrNull() ?: 0
+                val units = assignedUnits(line)
+
+                ElevatedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(line.item, fontWeight = FontWeight.SemiBold)
+                        Text("Sold ${line.quantity} • Already credited $alreadyReturned • Available to credit $availableQty", style = MaterialTheme.typography.bodySmall)
+                        OutlinedTextField(
+                            value = form.quantity,
+                            onValueChange = { value ->
+                                forms[index] = form.copy(quantity = value.filter { it.isDigit() }.take(3))
+                            },
+                            label = { Text("Quantity to credit") },
+                            supportingText = { Text("Maximum $availableQty") },
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true
+                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(
+                                checked = form.restock,
+                                onCheckedChange = { forms[index] = form.copy(restock = it) }
+                            )
+                            Text("Return credited item(s) to inventory")
+                        }
+
+                        if (units.isNotEmpty() && qty > 0) {
+                            Text("Select the exact IMEI / serial number(s) being credited", fontWeight = FontWeight.Medium)
+                            units.forEach { unit ->
+                                val checked = unit.identifier in form.selectedIdentifiers
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(
+                                        checked = checked,
+                                        onCheckedChange = { newValue ->
+                                            val selected = form.selectedIdentifiers.toMutableSet()
+                                            if (newValue) {
+                                                if (selected.size < qty) selected += unit.identifier
+                                            } else {
+                                                selected -= unit.identifier
+                                            }
+                                            forms[index] = form.copy(selectedIdentifiers = selected)
+                                        }
+                                    )
+                                    Text(unit.identifier)
+                                }
+                            }
+                            Text("Selected ${form.selectedIdentifiers.size} / $qty", style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (qty > availableQty) {
+                            Text("Quantity exceeds the amount still available to credit.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                }
+            }
+
+            val selectedForms = forms.filter { (it.quantity.toIntOrNull() ?: 0) > 0 }
+            val preview = selectedForms.mapNotNull { form ->
+                val line = lines.firstOrNull { it.id == form.saleLineId } ?: return@mapNotNull null
+                val qty = form.quantity.toIntOrNull() ?: 0
+                val inferredUnitNet = breakdownFromGross(line.unitGrossPence, sale.vatType).netPence
+                if (inferredUnitNet * line.quantity == line.lineNetPence) {
+                    breakdownFromNet(inferredUnitNet * qty, sale.vatType)
+                } else {
+                    breakdownFromGross(line.unitGrossPence * qty, sale.vatType)
+                }
+            }
+            val totalNet = preview.sumOf { it.netPence }
+            val totalVat = preview.sumOf { it.vatPence }
+            val totalGross = preview.sumOf { it.grossPence }
+
+            ElevatedCard(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text("Credit total", style = MaterialTheme.typography.labelLarge)
+                    Text(formatMoney(totalGross), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
+                    Text("Net ${formatMoney(totalNet)} • VAT ${formatMoney(totalVat)}", style = MaterialTheme.typography.bodySmall)
+                }
+            }
+            FormField("Credit note notes (optional)", notes, { notes = it }, singleLine = false)
+
+            Button(
+                enabled = anySelected && validity,
+                onClick = {
+                    val draftLines = forms.mapNotNull { form ->
+                        val qty = form.quantity.toIntOrNull() ?: 0
+                        if (qty <= 0) return@mapNotNull null
+                        val line = lines.first { it.id == form.saleLineId }
+                        val units = assignedUnits(line).filter { it.identifier in form.selectedIdentifiers }
+                        CreditNoteLineDraft(
+                            saleLineId = line.id,
+                            quantity = qty,
+                            restock = form.restock,
+                            units = units
+                        )
+                    }
+                    vm.issueCreditNote(
+                        CreditNoteDraft(
+                            saleId = sale.id,
+                            dateEpochDay = parseDateOrToday(date),
+                            notes = notes,
+                            lines = draftLines
+                        )
+                    ) { nav.popBackStack() }
+                },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Default.ReceiptLong, null)
+                Spacer(Modifier.width(6.dp))
+                Text("Issue credit note")
+            }
+            Spacer(Modifier.height(20.dp))
         }
     }
 }
