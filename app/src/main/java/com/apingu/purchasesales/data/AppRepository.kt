@@ -550,6 +550,9 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
 
     suspend fun deleteSale(saleId: Long) {
         val sale = dao.getSale(saleId) ?: return
+        require(dao.getCreditNotesForSale(saleId).isEmpty()) {
+            "This invoice has a credit note and must be retained for accounting traceability."
+        }
         db.withTransaction {
             val writableDb = db.openHelper.writableDatabase
             writableDb.execSQL(
