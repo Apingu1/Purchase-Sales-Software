@@ -7,6 +7,11 @@ data class PendingSaleInvoiceDeletion(
     val invoiceNo: String
 )
 
+data class PendingPurchaseInvoiceDeletion(
+    val purchaseDateEpochDay: Long,
+    val fileName: String
+)
+
 /**
  * Persists Dropbox sales-invoice deletions until the next successful sync. This means a sales
  * invoice can be deleted while Dropbox is disabled/offline and the stale cloud copy will still be
@@ -15,6 +20,7 @@ data class PendingSaleInvoiceDeletion(
 object DropboxDeletionQueue {
     private const val PREFS = "dropbox_deletion_queue"
     private const val KEY_SALES = "sales_invoice_deletions"
+    private const val KEY_PURCHASES = "purchase_invoice_deletions"
 
     @Synchronized
     fun enqueueSale(context: Context, saleDateEpochDay: Long, invoiceNo: String) {
@@ -36,6 +42,32 @@ object DropboxDeletionQueue {
         val values = prefs.getStringSet(KEY_SALES, emptySet()).orEmpty().toMutableSet()
         completed.forEach { values.remove(encode(it)) }
         prefs.edit().putStringSet(KEY_SALES, values).apply()
+    }
+
+    @Synchronized
+    fun enqueuePurchase(context: Context, purchaseDateEpochDay: Long, fileName: String) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val values = prefs.getStringSet(KEY_PURCHASES, emptySet()).orEmpty().toMutableSet()
+        values += "${purchaseDateEpochDay}\t${fileName}"
+        prefs.edit().putStringSet(KEY_PURCHASES, values).apply()
+    }
+
+    fun pendingPurchases(context: Context): List<PendingPurchaseInvoiceDeletion> {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        return prefs.getStringSet(KEY_PURCHASES, emptySet()).orEmpty().mapNotNull { raw ->
+            val split = raw.indexOf('\t')
+            if (split <= 0 || split >= raw.lastIndex) null
+            else raw.substring(0, split).toLongOrNull()?.let { PendingPurchaseInvoiceDeletion(it, raw.substring(split + 1)) }
+        }
+    }
+
+    @Synchronized
+    fun removePurchases(context: Context, completed: Collection<PendingPurchaseInvoiceDeletion>) {
+        if (completed.isEmpty()) return
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val values = prefs.getStringSet(KEY_PURCHASES, emptySet()).orEmpty().toMutableSet()
+        completed.forEach { values.remove("${it.purchaseDateEpochDay}\t${it.fileName}") }
+        prefs.edit().putStringSet(KEY_PURCHASES, values).apply()
     }
 
     private fun encode(value: PendingSaleInvoiceDeletion): String =
