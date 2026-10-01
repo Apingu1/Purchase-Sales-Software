@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feature/android-v1-complete
+      - feature/credit-notes-purchase-delete
   pull_request:
     branches:
       - main
