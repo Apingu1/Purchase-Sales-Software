@@ -73,6 +73,22 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
             }
             DropboxDeletionQueue.removePurchases(applicationContext, completedPurchaseDeletes)
 
+            val pendingCreditDeletes = DropboxDeletionQueue.pendingCreditNotes(applicationContext)
+            val completedCreditDeletes = mutableListOf<PendingCreditNoteDeletion>()
+            pendingCreditDeletes.forEach { pendingDelete ->
+                val period = periods.firstOrNull {
+                    pendingDelete.creditDateEpochDay in it.startEpochDay..it.endEpochDay
+                }
+                if (period != null) {
+                    DropboxApi.deleteIfExists(
+                        token,
+                        "$root/Accounting Periods/${safePeriod(period)}/Sales/Credit Notes/${pendingDelete.creditNoteNo}.pdf"
+                    )
+                    completedCreditDeletes += pendingDelete
+                }
+            }
+            DropboxDeletionQueue.removeCreditNotes(applicationContext, completedCreditDeletes)
+
             // Recovery and inventory remain global/all-time by design.
             val recoveryDir = File(applicationContext.filesDir, "recovery").apply { mkdirs() }
             val allPurchases = File(recoveryDir, "PURCHASES.txt").apply { writeText(purchasesDump(purchases)) }
