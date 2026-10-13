@@ -345,6 +345,30 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
             repo.saveCreditNote(value)
         }
 
+    fun deleteCreditNote(value: CreditNoteEntity, onSuccess: () -> Unit = {}) =
+        action("Credit note deleted", onSuccess) {
+            val returns = dao.getSaleReturnsForCreditNote(value.id)
+            val restockedReturnIds = returns.filter { it.restock }.map { it.id }.toSet()
+            val returnedIdentifiers = dao.getCreditNoteImeisForCreditNote(value.id)
+                .filter { it.saleReturnId in restockedReturnIds }
+                .map { it.identifier }
+                .toSet()
+
+            if (returnedIdentifiers.isNotEmpty()) {
+                val originalLineIds = dao.getSaleLinesForSale(value.saleId).map { it.id }.toSet()
+                val reused = dao.getSaleLines()
+                    .asSequence()
+                    .filter { it.id !in originalLineIds }
+                    .flatMap { line -> ImeiAssignmentStore.get(context, line.id).asSequence() }
+                    .firstOrNull { it in returnedIdentifiers }
+                require(reused == null) {
+                    "This credit note cannot be deleted because returned IMEI/serial $reused has since been sold. Correct the later sale first."
+                }
+            }
+
+            repo.deleteCreditNote(value.id)
+        }
+
     fun exportCreditNote(creditNoteId: Long, uri: Uri) = action("Credit note downloaded") {
         val credit = dao.getCreditNote(creditNoteId) ?: error("Credit note not found")
         val source = credit.pdfPath?.let(::File)?.takeIf { it.exists() } ?: error("Credit note PDF is not available")

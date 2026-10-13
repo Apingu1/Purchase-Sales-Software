@@ -32,6 +32,7 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
     val customers by vm.customers.collectAsStateWithLifecycle()
     val lines by vm.saleLines.collectAsStateWithLifecycle()
     var deleteSale by remember { mutableStateOf<SaleEntity?>(null) }
+    var deleteCredit by remember { mutableStateOf<CreditNoteEntity?>(null) }
     var downloadSale by remember { mutableStateOf<SaleEntity?>(null) }
     var downloadCredit by remember { mutableStateOf<CreditNoteEntity?>(null) }
 
@@ -153,6 +154,10 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
                                             Text(" Download credit note")
                                         }
                                     }
+                                    TextButton({ deleteCredit = credit }) {
+                                        Icon(Icons.Default.DeleteOutline, null)
+                                        Text(" Delete credit note")
+                                    }
                                 }
                             }
                         }
@@ -161,6 +166,25 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
                 }
             }
         }
+    }
+
+    deleteCredit?.let { credit ->
+        AlertDialog(
+            onDismissRequest = { deleteCredit = null },
+            title = { Text("Delete ${credit.creditNoteNo}?") },
+            text = {
+                Text(
+                    "This permanently deletes the credit note and reverses everything it changed: the sales/VAT credit, COGS reversal, and any stock or IMEI returned to inventory. The original sale becomes responsible for those items again. If returned stock has since been sold, deletion will be blocked. The deleted CN number can be used again."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteCreditNote(credit)
+                    deleteCredit = null
+                }) { Text("Delete credit note") }
+            },
+            dismissButton = { TextButton({ deleteCredit = null }) { Text("Cancel") } }
+        )
     }
 
     deleteSale?.let { sale ->

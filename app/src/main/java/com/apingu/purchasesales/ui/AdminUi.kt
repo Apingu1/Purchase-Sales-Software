@@ -132,6 +132,7 @@ fun BusinessScreen(vm: AppViewModel, nav: NavHostController) {
     var bank by remember(b) { mutableStateOf(b.bankDetails) }
     var terms by remember(b) { mutableStateOf(b.invoiceTerms) }
     var footer by remember(b) { mutableStateOf(b.invoiceFooter) }
+    var invoiceIdentifier by remember(b) { mutableStateOf(b.invoiceIdentifier) }
     var autoInvoiceNumber by remember { mutableStateOf(InvoiceNumberPreferences.isAutoEnabled(context)) }
     var dbToken by remember(b) { mutableStateOf(b.dropboxAccessToken) }
     var dbKey by remember(b) { mutableStateOf(b.dropboxAppKey) }
@@ -142,15 +143,26 @@ fun BusinessScreen(vm: AppViewModel, nav: NavHostController) {
     ScreenScaffold("Business Details", onBack = { nav.popBackStack() }) { inner -> Column(Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         FormField("Business name", name, { name = it }); FormField("Business address", address, { address = it }, singleLine = false); FormField("VAT number", vat, { vat = it }); FormField("Company number", company, { company = it }); FormField("Email", email, { email = it }); FormField("Phone", phone, { phone = it }); FormField("Bank/payment details for invoices", bank, { bank = it }, singleLine = false); FormField("Invoice terms", terms, { terms = it }); FormField("Invoice footer", footer, { footer = it }, singleLine = false)
         HorizontalDivider(); Text("Sales invoice numbering", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        FormField("Business invoice identifier", invoiceIdentifier, {
+            invoiceIdentifier = it.uppercase().filter { ch -> ch.isLetterOrDigit() }.take(8)
+        })
+        Text(
+            if (invoiceIdentifier.isBlank()) {
+                "Optional. Leave blank to keep the existing CUS-DDMMYY-01 format. Example identifier: MSG."
+            } else {
+                "Automatic invoices will use ${invoiceIdentifier}.CUS.DDMMYY.01. Existing invoices are not renamed."
+            },
+            style = MaterialTheme.typography.bodySmall
+        )
         Row(verticalAlignment = Alignment.CenterVertically) { Switch(autoInvoiceNumber, { autoInvoiceNumber = it }); Spacer(Modifier.width(10.dp)); Text("Automatic sales invoice number") }
-        Text(if (autoInvoiceNumber) "On — invoice numbers are generated automatically from the customer invoice code and sale date." else "Off — the Sales modal will show an Invoice number field so you can enter your own unique invoice number.", style = MaterialTheme.typography.bodySmall)
+        Text(if (autoInvoiceNumber) "On — invoice numbers are generated automatically from the business identifier (when set), customer invoice code and sale date." else "Off — the Sales modal will show an Invoice number field so you can enter your own unique invoice number.", style = MaterialTheme.typography.bodySmall)
         HorizontalDivider()
         AccountingPeriodsManager(vm)
         HorizontalDivider(); Text("Dropbox", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); Text("The simplest setup is to paste a generated Dropbox access token for your own account.", style = MaterialTheme.typography.bodySmall)
         Text("Each purchase invoice, sales PDF, expense receipt and Excel workbook is automatically placed under its matching Accounting Periods/<period name>/ folder based on the transaction date.", style = MaterialTheme.typography.bodySmall)
         TextButton(onClick = { showDropboxTokenHelp = true }, contentPadding = PaddingValues(0.dp)) { Icon(Icons.Default.HelpOutline, null); Spacer(Modifier.width(6.dp)); Text("How do I get an access token?") }
         FormField("Dropbox access token", dbToken, { dbToken = it }); FormField("Dropbox App Key (optional)", dbKey, { dbKey = it }); FormField("Dropbox refresh token (optional)", dbRefresh, { dbRefresh = it }); FormField("Dropbox root folder", dbRoot, { dbRoot = it }); Row(verticalAlignment = Alignment.CenterVertically) { Switch(auto, { auto = it }); Spacer(Modifier.width(10.dp)); Text("Automatic Dropbox sync") }
-        Button({ InvoiceNumberPreferences.setAutoEnabled(context, autoInvoiceNumber); vm.saveBusiness(b.copy(businessName = name, address = address, vatNumber = vat, companyNumber = company, email = email, phone = phone, bankDetails = bank, invoiceTerms = terms, invoiceFooter = footer, dropboxAccessToken = dbToken, dropboxAppKey = dbKey, dropboxRefreshToken = dbRefresh, dropboxRoot = dbRoot, dropboxAutoSync = auto)) { nav.popBackStack() } }, Modifier.fillMaxWidth()) { Icon(Icons.Default.Save, null); Text(" Save business details") }; Spacer(Modifier.height(20.dp))
+        Button({ InvoiceNumberPreferences.setAutoEnabled(context, autoInvoiceNumber); vm.saveBusiness(b.copy(businessName = name, address = address, vatNumber = vat, companyNumber = company, email = email, phone = phone, bankDetails = bank, invoiceTerms = terms, invoiceFooter = footer, invoiceIdentifier = invoiceIdentifier, dropboxAccessToken = dbToken, dropboxAppKey = dbKey, dropboxRefreshToken = dbRefresh, dropboxRoot = dbRoot, dropboxAutoSync = auto)) { nav.popBackStack() } }, Modifier.fillMaxWidth()) { Icon(Icons.Default.Save, null); Text(" Save business details") }; Spacer(Modifier.height(20.dp))
     } }
 
     if (showDropboxTokenHelp) {

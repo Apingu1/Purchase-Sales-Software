@@ -214,7 +214,7 @@ fun ImeiSelectionOverlay() {
     )
 }
 
-private const val WHATS_NEW_VERSION = "2026-10-01-credit-notes-v1"
+private const val WHATS_NEW_VERSION = "2026-10-13-business-prefix-credit-delete-v1"
 
 @Composable
 fun WhatsNewNotice() {
@@ -236,12 +236,12 @@ fun WhatsNewNotice() {
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("October 2026 update", fontWeight = FontWeight.Bold)
-                Text("• Issue full or partial credit notes directly from a sales invoice, including multiple item lines on one credit note.")
-                Text("• IMEI / serial-tracked sales require the exact returned identifier to be selected before the credit note is issued.")
-                Text("• Restocked credit-note items automatically return to inventory and profit/VAT figures update immediately.")
-                Text("• Credit notes appear in Sales, generate their own CN-000001 style PDF, sync to Dropbox and export to the SALES worksheet as negative entries.")
-                Text("• Purchase orders can now be deleted when none of their stock has sales history; deleted purchases disappear from future Excel exports.")
+                Text("13 October 2026 update", fontWeight = FontWeight.Bold)
+                Text("• Business Details now supports an optional business invoice identifier. For example, MSG with customer code CUS produces automatic invoice numbers such as MSG.CUS.131026.01.")
+                Text("• Existing sales invoices are not renamed, and manual invoice numbering continues to work exactly as before.")
+                Text("• Credit notes can now be deleted. Deleting a credit note removes its sales/VAT adjustment and reverses any stock, COGS and IMEI/serial return created by that credit note.")
+                Text("• Credit-note deletion is blocked if stock returned by that credit note has since been sold again.")
+                Text("• A deleted CN number becomes available for reuse; for example, deleting CN-000005 allows CN-000005 to be issued again when it is the next available number.")
             }
         },
         confirmButton = {

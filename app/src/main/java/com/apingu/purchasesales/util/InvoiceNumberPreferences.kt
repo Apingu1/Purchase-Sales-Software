@@ -27,6 +27,13 @@ object InvoiceNumberPreferences {
             .contains(key)
     }
 
+    fun usedInvoiceNumbers(context: Context): Set<String> =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getStringSet(KEY_USED_SALES_INVOICE_NUMBERS, emptySet())
+            .orEmpty()
+            .map(::normalize)
+            .toSet()
+
     @Synchronized
     fun markInvoiceNumberUsed(context: Context, invoiceNo: String) {
         val key = normalize(invoiceNo)

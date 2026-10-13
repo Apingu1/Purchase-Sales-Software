@@ -179,7 +179,14 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         }
     }
 
-    suspend fun saveBusiness(value: BusinessEntity) { dao.saveBusiness(value); enqueueSync() }
+    suspend fun saveBusiness(value: BusinessEntity) {
+        val identifier = value.invoiceIdentifier.trim().uppercase()
+        require(identifier.isBlank() || identifier.matches(Regex("[A-Z0-9]{2,8}"))) {
+            "Business invoice identifier must be 2–8 letters/numbers, e.g. MSG"
+        }
+        dao.saveBusiness(value.copy(invoiceIdentifier = identifier))
+        enqueueSync()
+    }
 
     suspend fun saveAccountingPeriod(value: AccountingPeriodEntity): Long {
         require(value.name.trim().isNotBlank()) { "Accounting period name is required" }
@@ -584,14 +591,35 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     }
 
     private suspend fun generateInvoiceNumber(customer: CustomerEntity, day: Long): String {
-        val prefix = "${customer.invoiceCode.uppercase()}-${compactDate(day)}-"
-        val existing = dao.getSales()
+        val customerCode = customer.invoiceCode.trim().uppercase()
+        val dateCode = compactDate(day)
+        val businessCode = dao.getBusiness()?.invoiceIdentifier?.trim()?.uppercase().orEmpty()
+
+        // Continue the customer/day sequence across legacy and business-prefixed invoice formats.
+        // Existing invoices are never renamed, and deleted sales invoice numbers remain reserved.
+        val allKnownNumbers = buildSet {
+            dao.getSales().forEach { add(it.invoiceNo.trim().uppercase()) }
+            addAll(InvoiceNumberPreferences.usedInvoiceNumbers(context))
+        }
+        val escapedCustomer = Regex.escape(customerCode)
+        val escapedDate = Regex.escape(dateCode)
+        val legacy = Regex("^$escapedCustomer-$escapedDate-(\\d+)$", RegexOption.IGNORE_CASE)
+        val prefixed = Regex("^[A-Z0-9]{2,8}\\.$escapedCustomer\\.$escapedDate\\.(\\d+)$", RegexOption.IGNORE_CASE)
+        val usedSequences = allKnownNumbers.mapNotNull { number ->
+            (legacy.matchEntire(number) ?: prefixed.matchEntire(number))
+                ?.groupValues?.getOrNull(1)?.toIntOrNull()
+        }.toSet()
+
         var sequence = 1
         while (sequence < 100_000) {
-            val candidate = "$prefix${sequence.toString().padStart(2, '0')}"
-            val inDatabase = existing.any { it.invoiceNo.equals(candidate, ignoreCase = true) }
-            val reserved = InvoiceNumberPreferences.wasInvoiceNumberUsed(context, candidate)
-            if (!inDatabase && !reserved) return candidate
+            if (sequence !in usedSequences) {
+                val suffix = sequence.toString().padStart(2, '0')
+                return if (businessCode.isBlank()) {
+                    "$customerCode-$dateCode-$suffix"
+                } else {
+                    "$businessCode.$customerCode.$dateCode.$suffix"
+                }
+            }
             sequence++
         }
         error("Unable to generate a unique invoice number")
@@ -814,13 +842,72 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         return creditId
     }
 
+    suspend fun deleteCreditNote(creditNoteId: Long) {
+        val credit = dao.getCreditNote(creditNoteId) ?: return
+        val creditReturns = dao.getSaleReturnsForCreditNote(creditNoteId)
+        val creditReturnIds = creditReturns.map { it.id }.toSet()
+        val allReturnAllocations = dao.getSaleReturnAllocations()
+        val removedReturnAllocations = allReturnAllocations.filter { it.saleReturnId in creditReturnIds }
+        val allSaleAllocations = dao.getSaleAllocations()
+        val allocationById = allSaleAllocations.associateBy { it.id }
+
+        // Removing a restock must not make a purchase lot negative. If it would, stock restored
+        // by this credit note has subsequently been consumed by another sale.
+        val affectedPurchaseIds = removedReturnAllocations.mapNotNull {
+            allocationById[it.saleAllocationId]?.purchaseId
+        }.toSet()
+        if (affectedPurchaseIds.isNotEmpty()) {
+            val soldByPurchase = allSaleAllocations.groupBy { it.purchaseId }
+                .mapValues { (_, rows) -> rows.sumOf { it.quantity } }
+            val restoredWithoutThisCredit = allReturnAllocations
+                .filterNot { it.saleReturnId in creditReturnIds }
+                .mapNotNull { ra ->
+                    allocationById[ra.saleAllocationId]?.purchaseId?.let { it to ra.quantity }
+                }
+                .groupBy({ it.first }, { it.second })
+                .mapValues { (_, quantities) -> quantities.sum() }
+            val purchaseMap = dao.getPurchases().associateBy { it.id }
+
+            affectedPurchaseIds.forEach { purchaseId ->
+                val purchase = purchaseMap[purchaseId] ?: return@forEach
+                val availableAfterDelete =
+                    purchase.receivedQty - purchase.returnedQty -
+                        (soldByPurchase[purchaseId] ?: 0) +
+                        (restoredWithoutThisCredit[purchaseId] ?: 0)
+                require(availableAfterDelete >= 0) {
+                    "This credit note cannot be deleted because returned stock has since been sold. Correct the later sale first."
+                }
+            }
+        }
+
+        db.withTransaction {
+            dao.deleteReturnAllocationsForCreditNote(creditNoteId)
+            dao.deleteCreditNoteImeisForCreditNote(creditNoteId)
+            dao.deleteSaleReturnsForCreditNote(creditNoteId)
+            dao.deleteCreditNote(credit)
+        }
+
+        credit.pdfPath?.let { File(it).delete() }
+        DropboxDeletionQueue.enqueueCreditNote(
+            context = context,
+            creditDateEpochDay = credit.creditDateEpochDay,
+            creditNoteNo = credit.creditNoteNo
+        )
+        enqueueSync()
+    }
+
     private suspend fun generateCreditNoteNumber(): String {
-        val highest = dao.getCreditNotes().mapNotNull { note ->
+        val used = dao.getCreditNotes().mapNotNull { note ->
             Regex("^CN-(\\d+)$", RegexOption.IGNORE_CASE)
                 .matchEntire(note.creditNoteNo.trim())
                 ?.groupValues?.getOrNull(1)?.toIntOrNull()
-        }.maxOrNull() ?: 0
-        return "CN-${(highest + 1).toString().padStart(6, '0')}"
+        }.toSet()
+        var sequence = 1
+        while (sequence < 1_000_000) {
+            if (sequence !in used) return "CN-${sequence.toString().padStart(6, '0')}"
+            sequence++
+        }
+        error("Unable to generate a unique credit note number")
     }
 
     suspend fun recordCustomerReturn(saleLineId: Long, day: Long, quantity: Int, restock: Boolean, notes: String) = db.withTransaction {

@@ -25,7 +25,8 @@ data class BusinessEntity(
     val dropboxRefreshToken: String = "",
     val dropboxRoot: String = "/Purchase-Sales-Software",
     val dropboxAutoSync: Boolean = false,
-    @ColumnInfo(defaultValue = "0") val selectedAccountingPeriodId: Long = 0
+    @ColumnInfo(defaultValue = "0") val selectedAccountingPeriodId: Long = 0,
+    @ColumnInfo(defaultValue = "''") val invoiceIdentifier: String = ""
 )
 
 @Entity(tableName = "accounting_periods")
@@ -263,6 +264,7 @@ interface AppDao {
     @Query("SELECT * FROM credit_notes WHERE saleId = :saleId ORDER BY id") suspend fun getCreditNotesForSale(saleId: Long): List<CreditNoteEntity>
     @Insert suspend fun insertCreditNote(value: CreditNoteEntity): Long
     @Update suspend fun updateCreditNote(value: CreditNoteEntity)
+    @Delete suspend fun deleteCreditNote(value: CreditNoteEntity)
 
     @Query("SELECT * FROM sale_returns ORDER BY returnDateEpochDay DESC, id DESC") fun observeSaleReturns(): Flow<List<SaleReturnEntity>>
     @Query("SELECT * FROM sale_returns ORDER BY id") suspend fun getSaleReturns(): List<SaleReturnEntity>
@@ -296,7 +298,7 @@ interface AppDao {
         SaleAllocationEntity::class, CreditNoteEntity::class, SaleReturnEntity::class, SaleReturnAllocationEntity::class,
         CreditNoteImeiEntity::class, ExpenseEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -401,10 +403,16 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `business` ADD COLUMN `invoiceIdentifier` TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder(
             context.applicationContext,
             AppDatabase::class.java,
             "purchase-sales.db"
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5).fallbackToDestructiveMigration().build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).fallbackToDestructiveMigration().build()
     }
 }
