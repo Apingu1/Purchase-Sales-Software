@@ -51,7 +51,7 @@ data class CustomerEntity(
     val notes: String = ""
 )
 
-@Entity(tableName = "purchase_orders")
+@Entity(tableName = "purchase_orders", indices = [Index(value = ["purchaseDateEpochDay", "invoiceSupplierKey", "invoiceSequence"], unique = true)])
 data class PurchaseOrderEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val purchaseDateEpochDay: Long,
@@ -536,6 +536,7 @@ abstract class AppDatabase : RoomDatabase() {
                     )
                 """.trimIndent())
 
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_purchase_orders_purchaseDateEpochDay_invoiceSupplierKey_invoiceSequence` ON `purchase_orders` (`purchaseDateEpochDay`, `invoiceSupplierKey`, `invoiceSequence`)")
                 db.execSQL("""
                     CREATE TABLE IF NOT EXISTS `purchase_invoices` (
                         `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,

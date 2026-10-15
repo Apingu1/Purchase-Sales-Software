@@ -249,7 +249,12 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             DocumentStore.copyIntoApp(context, it, "PUR_ORDER_${draft.id.takeIf { n -> n > 0 } ?: "NEW"}")
         }
         val attachmentName = attachmentUri?.let { PurchaseInvoiceFiles.originalName(context, it) }.orEmpty()
-        val attachmentFingerprint = copiedInvoice?.let(PurchaseInvoiceFiles::fingerprint)
+        val attachmentFingerprint = try {
+            copiedInvoice?.let(PurchaseInvoiceFiles::fingerprint)
+        } catch (error: Exception) {
+            copiedInvoice?.let { File(it).delete() }
+            throw error
+        }
 
         val orderId = try {
             db.withTransaction {
@@ -398,7 +403,12 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             val id = db.withTransaction {
                 requireNotNull(dao.getPurchaseOrder(orderId)) { "Purchase order not found" }
                 val existing = dao.getPurchaseInvoices(orderId)
-                require(existing.none { it.sha256.isNotBlank() && it.sha256 == fingerprint.sha256 }) {
+                require(existing.none { previous ->
+                    val priorHash = previous.sha256.ifBlank {
+                        runCatching { PurchaseInvoiceFiles.fingerprint(previous.filePath).sha256 }.getOrDefault("")
+                    }
+                    priorHash.isNotBlank() && priorHash == fingerprint.sha256
+                }) {
                     "This invoice is already attached to the purchase"
                 }
                 dao.insertPurchaseInvoice(PurchaseInvoiceEntity(
@@ -429,9 +439,9 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     suspend fun removePurchaseInvoiceDocument(invoiceId: Long) {
         val invoice = dao.getPurchaseInvoice(invoiceId) ?: error("Invoice not found")
         val order = dao.getPurchaseOrder(invoice.purchaseOrderId) ?: error("Purchase order not found")
-        val legacySlot = order.invoicePath == invoice.filePath
-        val affectedLegacyLines = if (legacySlot) dao.getPurchasesForOrder(order.id)
-            .filter { it.invoicePath == invoice.filePath } else emptyList()
+        val affectedLegacyLines = dao.getPurchasesForOrder(order.id)
+            .filter { it.invoicePath == invoice.filePath }
+        val legacySlot = order.invoicePath == invoice.filePath || affectedLegacyLines.isNotEmpty()
         db.withTransaction {
             dao.deletePurchaseInvoice(invoice)
             if (legacySlot) {
@@ -442,7 +452,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             }
         }
         if (legacySlot) {
-            affectedLegacyLines.forEach { line ->
+            val remoteLines = affectedLegacyLines.ifEmpty { dao.getPurchasesForOrder(order.id).take(1) }
+            remoteLines.forEach { line ->
                 val file = File(invoice.filePath)
                 val safeItem = line.item.replace(Regex("[^A-Za-z0-9._-]+"), "_").take(48)
                 DropboxDeletionQueue.enqueuePurchase(context, line.purchaseDateEpochDay,
@@ -571,8 +582,12 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             lines.forEach { dao.deletePurchase(it) }
             dao.deletePurchaseOrder(order)
         }
+        val otherDocuments = dao.getAllPurchaseInvoices().map { it.filePath }.toSet()
+        val otherOrderPaths = dao.getPurchaseOrders().mapNotNull { it.invoicePath }.toSet()
+        val otherLinePaths = dao.getPurchases().mapNotNull { it.invoicePath }.toSet()
         (lines.mapNotNull { it.invoicePath } + listOfNotNull(order.invoicePath) + linkedInvoiceFiles)
-            .distinct().forEach { File(it).delete() }
+            .distinct().filterNot { it in otherDocuments || it in otherOrderPaths || it in otherLinePaths }
+            .forEach { File(it).delete() }
         enqueueSync()
     }
 
