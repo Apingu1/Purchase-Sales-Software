@@ -150,12 +150,10 @@ object MailOAuth {
             .setRequestedScopes(listOf(Scope(GMAIL_SCOPE)))
         if (!accountEmail.isNullOrBlank()) {
             builder.setAccount(Account(accountEmail, "com.google"))
-        } else {
-            builder.setPrompt(AuthorizationRequest.Prompt.SELECT_ACCOUNT)
         }
         Identity.getAuthorizationClient(activity).authorize(builder.build())
             .addOnSuccessListener { result ->
-                if (result.hasResolution()) resolution(IntentSenderRequest.Builder(result.pendingIntent.intentSender).build())
+                if (result.hasResolution()) resolution(IntentSenderRequest.Builder(requireNotNull(result.pendingIntent).intentSender).build())
                 else if (!result.accessToken.isNullOrBlank()) complete(result.accessToken!!)
                 else error("Google did not issue an access token")
             }
