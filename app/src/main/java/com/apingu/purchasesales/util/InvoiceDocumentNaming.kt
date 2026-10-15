@@ -16,7 +16,8 @@ object InvoiceDocumentNaming {
         val safeSupplier = supplier.trim()
             .replace(Regex("[^\\p{L}\\p{N} ._#()-]"), " ")
             .replace(Regex("\\s+"), " ")
-            .trim().trimEnd('.')
+            .replace(Regex("\\.{2,}"), ".")
+            .trim().trim('.', ' ')
             .take(90).ifBlank { "Supplier" }
         return "${LocalDate.ofEpochDay(dateEpochDay).format(dateFormat)} - $safeSupplier #$dailySequence"
     }

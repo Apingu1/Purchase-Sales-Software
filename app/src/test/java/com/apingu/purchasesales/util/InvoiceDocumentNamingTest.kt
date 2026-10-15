@@ -30,7 +30,7 @@ class InvoiceDocumentNamingTest {
         assertFalse(name.contains('/'))
         assertFalse(name.contains('\\'))
         assertFalse(name.contains(".."))
-        assertEquals("14 Oct 2026 - . Costco VIP #1 - Invoice 2.pdf", name)
+        assertEquals("14 Oct 2026 - Costco VIP #1 - Invoice 2.pdf", name)
     }
 
     @Test fun invalidOrdinalsAreRejected() {
