@@ -3,9 +3,11 @@
     <cloud-backup>
         <exclude domain="sharedpref" path="purchase_sales_imap_secrets.xml" />
         <exclude domain="sharedpref" path="mail_oauth_state.xml" />
+    <exclude domain="sharedpref" path="purchase_sales_microsoft_pending_oauth.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="purchase_sales_imap_secrets.xml" />
         <exclude domain="sharedpref" path="mail_oauth_state.xml" />
+    <exclude domain="sharedpref" path="purchase_sales_microsoft_pending_oauth.xml" />
     </device-transfer>
 </data-extraction-rules>
