@@ -125,16 +125,16 @@ object MailOAuth {
         // task stack on some devices / account-chooser and authenticator handoffs.
         // Keep AppAuth PKCE, redirect verification and token exchange unchanged.
         // A Custom Tab remains available as an explicit fallback in the UI.
-        val configuration = if (useExternalBrowser) {
-            net.openid.appauth.AppAuthConfiguration.Builder()
+        val service = if (useExternalBrowser) {
+            val config = net.openid.appauth.AppAuthConfiguration.Builder()
                 .setBrowserMatcher(net.openid.appauth.browser.BrowserMatcher { browser ->
                     !browser.useCustomTab
                 })
                 .build()
+            AuthorizationService(activity, config)
         } else {
-            net.openid.appauth.AppAuthConfiguration.DEFAULT
+            AuthorizationService(activity)
         }
-        val service = AuthorizationService(activity, configuration)
         activeMicrosoftService = service
         try {
             service.performAuthorizationRequest(request, success, cancelled)
