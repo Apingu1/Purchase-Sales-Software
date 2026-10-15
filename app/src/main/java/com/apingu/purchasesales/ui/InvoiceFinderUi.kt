@@ -17,7 +17,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -43,8 +42,8 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
     val orders by vm.purchaseOrders.collectAsStateWithLifecycle()
     val docs by vm.purchaseInvoices.collectAsStateWithLifecycle()
     val suggestions by vm.pendingInvoiceCandidates.collectAsStateWithLifecycle()
-    var tab by rememberSaveable { mutableIntStateOf(0) }
-    var query by rememberSaveable { mutableStateOf("") }
+    var tab by remember { mutableIntStateOf(0) }
+    var query by remember { mutableStateOf("") }
     var target by remember { mutableStateOf<Long?>(null) }
     var preview by remember { mutableStateOf<PurchaseInvoiceEntity?>(null) }
     var reject by remember { mutableStateOf<InvoiceCandidateEntity?>(null) }
