@@ -85,17 +85,57 @@ object MailOAuth {
         )
     }
 
-    fun microsoftAuthIntent(activity: Activity): Intent {
+    private var activeMicrosoftService: AuthorizationService? = null
+
+    /**
+     * Use explicit completion AND cancellation callbacks rather than an activity result.
+     * Android may recreate the Compose screen while the external Microsoft browser is open.
+     * AppAuth returns a filled-in PendingIntent with the OAuth response, even after recreation.
+     */
+    @Synchronized
+    fun startMicrosoftAuthorization(activity: Activity) {
         val clientId = MailConnectionSettings.microsoftClientId(activity)
         require(MailConnectionSettings.isValidMicrosoftClientId(clientId)) {
-            "Set the Microsoft Entra Application (client) ID under Connected Email Accounts before signing in"
+            "The app owner must configure the Microsoft Entra public client ID before signing in"
         }
         val request = MicrosoftAuthorizationRequest.Builder(
             configuration, clientId,
             ResponseTypeValues.CODE, Uri.parse(MS_REDIRECT)
         ).setScope(MS_SCOPES).setPrompt("select_account").build()
+
+        // AppAuth must add authorization response/error extras to the callback PendingIntent.
+        // Both targets are explicit, non-exported components of our own app.
+        val flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                android.app.PendingIntent.FLAG_MUTABLE else 0)
+        val success = android.app.PendingIntent.getActivity(
+            activity, 6401,
+            Intent(activity, MicrosoftOAuthResultActivity::class.java).apply {
+                action = MicrosoftOAuthResultActivity.ACTION_COMPLETE
+            }, flags
+        )
+        val cancelled = android.app.PendingIntent.getActivity(
+            activity, 6402,
+            Intent(activity, MicrosoftOAuthResultActivity::class.java).apply {
+                action = MicrosoftOAuthResultActivity.ACTION_CANCEL
+            }, flags
+        )
+        activeMicrosoftService?.dispose()
         val service = AuthorizationService(activity)
-        return service.getAuthorizationRequestIntent(request).also { service.dispose() }
+        activeMicrosoftService = service
+        try {
+            service.performAuthorizationRequest(request, success, cancelled)
+        } catch (ex: Exception) {
+            service.dispose()
+            activeMicrosoftService = null
+            throw ex
+        }
+    }
+
+    @Synchronized
+    fun finishMicrosoftAuthorization() {
+        activeMicrosoftService?.dispose()
+        activeMicrosoftService = null
     }
 
     suspend fun completeMicrosoft(context: Context, data: Intent): Pair<String, String> {
