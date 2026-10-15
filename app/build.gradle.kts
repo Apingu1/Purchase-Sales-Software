@@ -7,6 +7,11 @@ plugins {
 
 val ciVersionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 val ciKeystorePath = System.getenv("PURCHASE_SALES_KEYSTORE_PATH")
+// Microsoft Entra Application (client) ID is a PUBLIC OAuth identifier, not a secret.
+// Embed a working default in every APK so friends can simply tap Connect Outlook.
+val microsoftPublicClientId = System.getenv("PURCHASE_SALES_MS_CLIENT_ID")
+    ?.trim()?.takeIf { it.isNotBlank() }
+    ?: "4f0b4647-34ae-4597-af86-f58a24678361"
 
 android {
     namespace = "com.apingu.purchasesales"
@@ -16,7 +21,7 @@ android {
 
     defaultConfig {
         applicationId = "com.apingu.purchasesales"
-        buildConfigField("String", "MICROSOFT_CLIENT_ID", "\"${System.getenv("PURCHASE_SALES_MS_CLIENT_ID") ?: ""}\"")
+        buildConfigField("String", "MICROSOFT_CLIENT_ID", "\"$microsoftPublicClientId\"")
         manifestPlaceholders["appAuthRedirectScheme"] = "com.apingu.purchasesales"
         minSdk = 28
         targetSdk = 35
