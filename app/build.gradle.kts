@@ -83,6 +83,8 @@ dependencies {
 
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("net.openid:appauth:0.11.1")
+    implementation("com.sun.mail:android-mail:1.6.7")
+    implementation("com.sun.mail:android-activation:1.6.7")
     implementation("com.google.android.gms:play-services-auth:21.3.0")
     implementation("androidx.documentfile:documentfile:1.0.1")
 
