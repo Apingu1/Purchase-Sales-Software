@@ -1,6 +1,9 @@
 package com.apingu.purchasesales.ui
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,6 +23,7 @@ import androidx.navigation.NavHostController
 import com.apingu.purchasesales.BuildConfig
 import com.apingu.purchasesales.data.EmailAccountEntity
 import com.apingu.purchasesales.mail.MailOAuth
+import com.apingu.purchasesales.mail.MailConnectionSettings
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,14 +33,33 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
     val accounts by vm.emailAccounts.collectAsStateWithLifecycle()
     var disconnect by remember { mutableStateOf<EmailAccountEntity?>(null) }
     var googleAddress by remember { mutableStateOf("") }
+    var requestedGoogleAddress by remember { mutableStateOf("") }
+    var microsoftClientId by remember { mutableStateOf(MailConnectionSettings.microsoftClientId(context)) }
+    val installedSha1 = remember {
+        runCatching { MailConnectionSettings.signingSha1(context) }
+            .getOrElse { "Unavailable: " + (it.message ?: "cannot read signing certificate") }
+    }
     val googleResult = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            runCatching { MailOAuth.googleTokenFromIntent(context, result.data!!) }
-                .onSuccess { vm.connectGmailToken(it, googleAddress.trim()) }
-                .onFailure { vm.reportMailboxError(it.message ?: "Gmail sign-in failed") }
-        } else vm.reportMailboxError("Gmail account authorisation was cancelled")
+        // A failed OAuth handshake can also return RESULT_CANCELED.
+        // Parse any provider response before guessing that the user cancelled.
+        val data = result.data
+        if (data != null) {
+            runCatching { MailOAuth.googleTokenFromIntent(context, data) }
+                .onSuccess { vm.connectGmailToken(it, requestedGoogleAddress) }
+                .onFailure { vm.reportMailboxError(MailOAuth.googleAuthorizationError(it)) }
+        } else if (result.resultCode == Activity.RESULT_CANCELED) {
+            vm.reportMailboxError(
+                "Google account selection ended without an authorization response. " +
+                    "If you selected an account (rather than pressing Back), check the " +
+                    "Google Cloud Android OAuth client, the APK signing SHA-1 shown below, " +
+                    "and that this Gmail account is an authorized test user."
+            )
+        } else {
+            vm.reportMailboxError("Google did not return an authorization result (Android result " +
+                result.resultCode + "). Check Google Cloud configuration.")
+        }
     }
     val microsoftResult = rememberLauncherForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -75,8 +98,12 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
                 )
                 Button(
                     onClick = {
+                        requestedGoogleAddress = googleAddress.trim()
                         MailOAuth.googleAuthorize(activity,
-                            resolution = { googleResult.launch(it) },
+                            resolution = {
+                                requestedGoogleAddress = googleAddress.trim()
+                                googleResult.launch(it)
+                            },
                             complete = { vm.connectGmailToken(it, googleAddress.trim()) },
                             error = vm::reportMailboxError,
                             accountEmail = googleAddress.trim().ifBlank { null }
@@ -85,20 +112,55 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
                 ) { Icon(Icons.Default.Add, null); Text(" Connect Gmail / Google Workspace") }
             }
             item {
+                HorizontalDivider()
+                Text("Google OAuth setup", style = MaterialTheme.typography.titleMedium)
+                Text("If choosing an email closes the Google sign-in screen, verify your Google Cloud Android OAuth client matches the installed APK. Both values below are required.",
+                    style = MaterialTheme.typography.bodySmall)
+                Text("Android package: " + context.packageName,
+                    style = MaterialTheme.typography.bodySmall)
+                Text("Installed APK certificate SHA-1:\n" + installedSha1,
+                    style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(ClipData.newPlainText("Android APK SHA-1", installedSha1))
+                    vm.reportMailboxError("APK signing SHA-1 copied")
+                }) { Icon(Icons.Default.ContentCopy, null); Text(" Copy APK SHA-1") }
+                Text("Gmail API must be enabled and gmail.readonly consent configured. If your Google OAuth app is in testing, add each purchasing Google account as a test user.",
+                    style = MaterialTheme.typography.bodySmall)
+            }
+            item {
+                HorizontalDivider()
+                Text("Microsoft / Outlook OAuth setup", style = MaterialTheme.typography.titleMedium)
+                Text("Create a Microsoft Entra app registration (Mobile and desktop public client), then paste its Application (client) ID below. You do not need a client secret.",
+                    style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(
+                    value = microsoftClientId, onValueChange = { microsoftClientId = it.trim() },
+                    label = { Text("Microsoft Application (client) ID") },
+                    placeholder = { Text("xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx") },
+                    supportingText = { Text("Redirect URI: " + MailOAuth.MS_REDIRECT) },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                )
+                OutlinedButton(onClick = {
+                    runCatching { MailConnectionSettings.saveMicrosoftClientId(context, microsoftClientId) }
+                        .onSuccess { vm.reportMailboxError("Microsoft client ID saved on this device") }
+                        .onFailure { vm.reportMailboxError(it.message ?: "Invalid Microsoft client ID") }
+                }, enabled = MailConnectionSettings.isValidMicrosoftClientId(microsoftClientId)) {
+                    Icon(Icons.Default.Save, null); Text(" Save client ID")
+                }
                 Button(
                     onClick = {
-                        runCatching { MailOAuth.microsoftAuthIntent(activity) }
-                            .onSuccess { microsoftResult.launch(it) }
-                            .onFailure { vm.reportMailboxError(it.message ?: "Microsoft setup is incomplete") }
-                    }, modifier = Modifier.fillMaxWidth(),
-                    enabled = BuildConfig.MICROSOFT_CLIENT_ID.isNotBlank()
+                        runCatching {
+                            MailConnectionSettings.saveMicrosoftClientId(context, microsoftClientId)
+                            MailOAuth.microsoftAuthIntent(activity)
+                        }.onSuccess { microsoftResult.launch(it) }
+                            .onFailure { vm.reportMailboxError(it.message ?: "Microsoft registration is incomplete") }
+                    }, modifier = Modifier.fillMaxWidth()
                 ) { Icon(Icons.Default.Add, null); Text(" Connect Outlook / Microsoft 365") }
-                if (BuildConfig.MICROSOFT_CLIENT_ID.isBlank()) Text(
-                    "Microsoft Entra application registration is required before this button can be enabled. " +
-                        "See the developer email integration setup guide.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                if (!MailConnectionSettings.isValidMicrosoftClientId(microsoftClientId)) {
+                    Text("Enter a valid Application (client) ID to activate Microsoft sign-in.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
             item {
                 HorizontalDivider()
