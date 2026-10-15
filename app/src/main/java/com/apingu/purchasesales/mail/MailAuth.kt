@@ -14,6 +14,7 @@ import com.apingu.purchasesales.BuildConfig
 import com.google.android.gms.auth.api.identity.AuthorizationRequest
 import com.google.android.gms.auth.api.identity.Identity
 import com.google.android.gms.common.api.Scope
+import com.google.android.gms.common.api.ApiException
 import kotlinx.coroutines.suspendCancellableCoroutine
 import net.openid.appauth.AuthState
 import net.openid.appauth.AuthorizationRequest as MicrosoftAuthorizationRequest
@@ -85,11 +86,12 @@ object MailOAuth {
     }
 
     fun microsoftAuthIntent(activity: Activity): Intent {
-        require(BuildConfig.MICROSOFT_CLIENT_ID.isNotBlank()) {
-            "Microsoft Entra application client ID is not configured in this APK"
+        val clientId = MailConnectionSettings.microsoftClientId(activity)
+        require(MailConnectionSettings.isValidMicrosoftClientId(clientId)) {
+            "Set the Microsoft Entra Application (client) ID under Connected Email Accounts before signing in"
         }
         val request = MicrosoftAuthorizationRequest.Builder(
-            configuration, BuildConfig.MICROSOFT_CLIENT_ID,
+            configuration, clientId,
             ResponseTypeValues.CODE, Uri.parse(MS_REDIRECT)
         ).setScope(MS_SCOPES).setAdditionalParameters(mapOf("prompt" to "select_account")).build()
         val service = AuthorizationService(activity)
@@ -157,7 +159,24 @@ object MailOAuth {
                 else if (!result.accessToken.isNullOrBlank()) complete(result.accessToken!!)
                 else error("Google did not issue an access token")
             }
-            .addOnFailureListener { error(it.message ?: "Google authorisation failed") }
+            .addOnFailureListener { error(googleAuthorizationError(it)) }
+    }
+
+    /**
+     * Show the actual provider error rather than labelling every unsuccessful
+     * resolution as a deliberate user cancellation.
+     */
+    fun googleAuthorizationError(cause: Throwable): String {
+        val api = generateSequence(cause) { it.cause }
+            .filterIsInstance<ApiException>()
+            .firstOrNull()
+        return when (api?.statusCode) {
+            10 -> "Google OAuth configuration error (status 10). Check the Android OAuth client's package name, signing certificate SHA-1, Gmail API and test-user consent configuration."
+            16 -> "Google authorization was cancelled (status 16). If you selected an account rather than cancelling, check its OAuth consent/test-user configuration."
+            null -> "Google authorization failed: " + (cause.localizedMessage ?: "Unknown error")
+            else -> "Google authorization failed (status " + (api?.statusCode ?: "unknown") + "): " +
+                (api?.localizedMessage ?: "Check the Google Cloud OAuth app configuration")
+        }
     }
 
     fun googleTokenFromIntent(context: Context, intent: Intent): String =

@@ -7,6 +7,7 @@ on:
       - feature/android-v1-complete
       - feature/invoice-finder-ui
       - feature/invoice-finder-email-dropbox
+      - feature/mail-oauth-connection-fix
   pull_request:
     branches:
       - main
