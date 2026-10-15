@@ -45,42 +45,18 @@ Select **Connect Outlook** to open the official Microsoft login portal via Andro
 - Test real APK installs as *updates*, not uninstall/reinstall, so purchasing data is retained.
 
 
-### Microsoft browser sign-in recovery (October 2026)
+### Microsoft login troubleshooting
 
-The AppAuth-based Android sign-in now uses explicit completion/cancellation PendingIntents
-and a private result Activity to survive the browser returning after the original
-Jetpack Compose screen was recreated. The redirect handler accepts the exact
-`com.apingu.purchasesales://oauth2redirect` callback registered in Azure,
-and Android 11+ browser visibility lets AppAuth discover Custom Tabs providers.
+Previous development builds tried AppAuth's built-in browser management and
+Chrome/Custom Tab fallbacks, but could report "User cancelled flow" before
+Microsoft returned an authorization response. Those methods were superseded
+by the working direct OAuth browser callback described below.
 
-After updating your APK, tap **Connect Outlook**, select the Microsoft account,
-complete sign-in in the same browser tab and allow Android to return automatically.
-A small result screen will report success or the underlying error. The message
-**User cancelled flow** can mean that the browser returned without delivering
-an OAuth redirect: it does not prove the user intentionally pressed Back.
-
-If a connection does not complete, screenshot the **Outlook account connection**
-result screen (do not send verification codes, auth URLs or tokens). First try
-setting Chrome as the default browser and avoid opening another app or manually
-closing the authentication tab. Check that the saved Microsoft Entra platform is
-**Mobile and desktop applications** and the redirect URI is exactly the one above.
-
-The initial build and unit tests do not exercise real Microsoft login, device
-browser return, or the Microsoft Graph API. Treat the connection as validated
-only after a real Outlook/Hotmail account displays CONNECTED and Invoice Finder
-can search that mailbox.
-
-
-### Browser-selection workaround after missing-redirect cancellations
-
-If a user sees **“The browser returned before the Microsoft authorization redirect reached the app”**, the Microsoft Azure setup is not necessarily invalid: it means the AppAuth login was interrupted before the expected OAuth response returned. These cases can occur on Android during transitions between Custom Tabs, the account chooser and another sign-in app.
-
-The default **Connect Outlook** action now uses an external system browser (not a Custom Tab) with the existing Microsoft OAuth PKCE flow. The account manager also provides **Try browser-tab sign-in instead** to switch back to the original Custom Tabs method. Both use the identical registered redirect URI, permissions and public client ID; neither asks for normal email passwords.
-
-During testing, choose one browser route, complete all steps on Microsoft's sign-in page, and allow the device to switch automatically to Purchase & Sales. Do not press Android Back or close the tab. If a consent/error page appears, capture the error code shown (but not authentication URLs, passwords, PINs or tokens).
-
-Because the code cannot simulate a personal Outlook browser session in GitHub Actions, **successful CI does not establish successful login**. Confirm successful on-device return and connected mailbox before handing the feature to additional users.
-
+If a future account cannot connect, record the Microsoft error code or screenshot
+the in-app result screen without exposing passwords, tokens or authorization URLs.
+Confirm the Microsoft Entra public-client redirect is exactly
+`com.apingu.purchasesales://oauth2redirect` and the Android APK has not been
+uninstalled (updates preserve the device's encrypted credentials).
 
 ### Direct OAuth browser callback (October 15, 2026)
 
