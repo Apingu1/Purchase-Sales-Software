@@ -28,12 +28,13 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
     val activity = context as ComponentActivity
     val accounts by vm.emailAccounts.collectAsStateWithLifecycle()
     var disconnect by remember { mutableStateOf<EmailAccountEntity?>(null) }
+    var googleAddress by remember { mutableStateOf("") }
     val googleResult = rememberLauncherForActivityResult(
         ActivityResultContracts.StartIntentSenderForResult()
     ) { result ->
         if (result.resultCode == Activity.RESULT_OK && result.data != null) {
             runCatching { MailOAuth.googleTokenFromIntent(context, result.data!!) }
-                .onSuccess(vm::connectGmailToken)
+                .onSuccess { vm.connectGmailToken(it, googleAddress.trim()) }
                 .onFailure { vm.reportMailboxError(it.message ?: "Gmail sign-in failed") }
         } else vm.reportMailboxError("Gmail account authorisation was cancelled")
     }
@@ -66,12 +67,19 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
                 )
             }
             item {
+                OutlinedTextField(
+                    value = googleAddress, onValueChange = { googleAddress = it },
+                    label = { Text("Gmail address to connect (optional)") },
+                    supportingText = { Text("Enter the exact Gmail address when linking multiple Google accounts.") },
+                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                )
                 Button(
                     onClick = {
                         MailOAuth.googleAuthorize(activity,
                             resolution = { googleResult.launch(it) },
-                            complete = vm::connectGmailToken,
-                            error = vm::reportMailboxError
+                            complete = { vm.connectGmailToken(it, googleAddress.trim()) },
+                            error = vm::reportMailboxError,
+                            accountEmail = googleAddress.trim().ifBlank { null }
                         )
                     }, modifier = Modifier.fillMaxWidth()
                 ) { Icon(Icons.Default.Add, null); Text(" Connect Gmail / Google Workspace") }

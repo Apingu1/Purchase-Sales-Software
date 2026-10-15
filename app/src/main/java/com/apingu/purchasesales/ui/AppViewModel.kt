@@ -31,9 +31,12 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     private val _finderRunning = MutableStateFlow(false)
     val finderRunning: StateFlow<Boolean> = _finderRunning
 
-    fun connectGmailToken(token: String) = action("Gmail account connected") {
+    fun connectGmailToken(token: String, expectedAddress: String = "") = action("Gmail account connected") {
         val email = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             com.apingu.purchasesales.mail.MailOAuth.verifiedGmailAddress(token)
+        }
+        require(expectedAddress.isBlank() || email.equals(expectedAddress.trim(), ignoreCase = true)) {
+            "Google authenticated " + email + " rather than requested " + expectedAddress
         }
         saveConnectedMailbox(email, "GMAIL")
     }
