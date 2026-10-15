@@ -69,3 +69,14 @@ The initial build and unit tests do not exercise real Microsoft login, device
 browser return, or the Microsoft Graph API. Treat the connection as validated
 only after a real Outlook/Hotmail account displays CONNECTED and Invoice Finder
 can search that mailbox.
+
+
+### Browser-selection workaround after missing-redirect cancellations
+
+If a user sees **“The browser returned before the Microsoft authorization redirect reached the app”**, the Microsoft Azure setup is not necessarily invalid: it means the AppAuth login was interrupted before the expected OAuth response returned. These cases can occur on Android during transitions between Custom Tabs, the account chooser and another sign-in app.
+
+The default **Connect Outlook** action now uses an external system browser (not a Custom Tab) with the existing Microsoft OAuth PKCE flow. The account manager also provides **Try browser-tab sign-in instead** to switch back to the original Custom Tabs method. Both use the identical registered redirect URI, permissions and public client ID; neither asks for normal email passwords.
+
+During testing, choose one browser route, complete all steps on Microsoft's sign-in page, and allow the device to switch automatically to Purchase & Sales. Do not press Android Back or close the tab. If a consent/error page appears, capture the error code shown (but not authentication URLs, passwords, PINs or tokens).
+
+Because the code cannot simulate a personal Outlook browser session in GitHub Actions, **successful CI does not establish successful login**. Confirm successful on-device return and connected mailbox before handing the feature to additional users.
