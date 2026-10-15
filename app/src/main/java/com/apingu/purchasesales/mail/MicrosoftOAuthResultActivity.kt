@@ -28,8 +28,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import net.openid.appauth.AuthorizationException
-import net.openid.appauth.AuthorizationResponse
 
 /**
  * Explicit non-exported callback for AppAuth browser sign-in. PendingIntent
@@ -44,7 +42,6 @@ class MicrosoftOAuthResultActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        MailOAuth.finishMicrosoftAuthorization()
         val model = ViewModelProvider(this)[MicrosoftOAuthResultModel::class.java]
         model.process(intent)
         setContent {
@@ -107,29 +104,23 @@ internal class MicrosoftOAuthResultModel(app: Application) : AndroidViewModel(ap
         started = true
         viewModelScope.launch {
             try {
-                val response = AuthorizationResponse.fromIntent(data)
-                val exception = AuthorizationException.fromIntent(data)
-                if (response == null) {
-                    val detail = if (exception?.code ==
-                        AuthorizationException.GeneralErrors.USER_CANCELED_AUTH_FLOW.code) {
-                        "The browser returned before the Microsoft authorization redirect reached the app. " +
-                            "If you did not press Back, try again using Chrome as your default browser. " +
-                            "Do not manually close the login tab."
-                    } else if (exception != null) {
-                        "Microsoft sign-in error (" + (exception.error ?: "AppAuth " + exception.code) +
-                            "): " + (exception.errorDescription ?: "Please retry the connection.").take(240)
-                    } else {
-                        "No Microsoft authorization response was received. " +
-                            "Try again using Chrome and allow it to return to the app."
-                    }
+                if (data.action != Intent.ACTION_VIEW || data.data == null) {
                     mutableStatus.value = OutlookConnectionResult(
-                        pending = false, message = detail
+                        pending = false,
+                        message = "No OAuth redirect was received from Microsoft. " +
+                            "The login browser may have been closed before completing sign-in. " +
+                            "Open Connect Outlook again; if you reached a Microsoft error page, " +
+                            "note its error code."
                     )
                     return@launch
                 }
                 val context = getApplication<Application>().applicationContext
                 val email = withContext(Dispatchers.IO) {
-                    val (address, provider) = MailOAuth.completeMicrosoft(context, data)
+                    val callback = requireNotNull(data.data)
+                    val response = MicrosoftOAuthBrowser.verifiedResponse(context, callback)
+                    val (address, provider) = MailOAuth.completeMicrosoft(
+                        context, response.toIntent()
+                    )
                     val database = (getApplication<Application>() as PurchaseSalesApplication).database
                     val dao = database.dao()
                     val existing = dao.getEmailAccount(address)
