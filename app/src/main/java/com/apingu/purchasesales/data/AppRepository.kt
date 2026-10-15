@@ -463,7 +463,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             "." + preview.extension)
         try {
             preview.copyTo(saved)
-            val hash = PurchaseInvoiceFiles.fingerprint(saved)
+            val hash = PurchaseInvoiceFiles.fingerprint(saved.absolutePath)
             val newId = db.withTransaction {
                 val current = dao.getInvoiceCandidate(candidateId) ?: error("Candidate not found")
                 require(current.status == "PENDING_REVIEW") { "Candidate already reviewed" }
