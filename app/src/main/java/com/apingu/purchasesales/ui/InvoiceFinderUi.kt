@@ -205,3 +205,172 @@ private fun FinderOrderCard(
         }
     }
 }
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun InvoicePurchaseDetailScreen(vm: AppViewModel, nav: NavHostController, orderId: Long) {
+    val orders by vm.purchaseOrders.collectAsStateWithLifecycle()
+    val allDocs by vm.purchaseInvoices.collectAsStateWithLifecycle()
+    val order = orders.firstOrNull { it.id == orderId }
+    val docs = allDocs.filter { it.purchaseOrderId == orderId }
+        .sortedWith(compareBy<PurchaseInvoiceEntity> { it.invoiceOrdinal }.thenBy { it.id })
+    var preview by remember { mutableStateOf<PurchaseInvoiceEntity?>(null) }
+    var removal by remember { mutableStateOf<PurchaseInvoiceEntity?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) vm.addPurchaseInvoices(orderId, uris)
+    }
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("Purchase invoices") },
+            navigationIcon = { IconButton({ nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } }) },
+        contentWindowInsets = WindowInsets(0, 0, 0, 0)
+    ) { padding ->
+        if (order == null) Box(Modifier.padding(padding).fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text("Purchase not found")
+        } else Column(
+            Modifier.padding(padding).fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Text(order.supplier, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
+            Text(editDate(order.purchaseDateEpochDay) + " • " + order.orderNumber.ifBlank { "No order number" })
+            OutlinedButton({ nav.navigate("purchase/" + orderId) }, Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.OpenInNew, null); Text(" Open purchase")
+            }
+            Button({ picker.launch(arrayOf("application/pdf", "image/png", "image/jpeg")) },
+                Modifier.fillMaxWidth()) { Icon(Icons.Default.AttachFile, null); Text(" Add invoice(s)") }
+            Text(docs.size.toString() + " approved document(s)", style = MaterialTheme.typography.titleMedium)
+            if (docs.isEmpty()) Text("No approved invoices attached.")
+            docs.forEach { doc ->
+                ElevatedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(doc.displayName(order), fontWeight = FontWeight.SemiBold)
+                        Text("Original: " + doc.originalFileName.ifBlank { File(doc.filePath).name },
+                            style = MaterialTheme.typography.bodySmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Button({ preview = doc }) {
+                                Icon(Icons.Default.Visibility, null, Modifier.size(18.dp)); Text(" Preview")
+                            }
+                            OutlinedButton({ removal = doc }) {
+                                Icon(Icons.Default.DeleteOutline, null, Modifier.size(18.dp)); Text(" Remove")
+                            }
+                        }
+                    }
+                }
+            }
+            Text("Additional invoices are stored privately on this device. Multi-invoice Dropbox uploads will follow in a separate phase.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+    }
+    val shown = preview
+    if (shown != null && order != null) InvoiceFilePreview(shown.filePath, shown.displayName(order)) {
+        preview = null
+    }
+    removal?.let { doc ->
+        AlertDialog(
+            onDismissRequest = { removal = null },
+            title = { Text("Remove this invoice?") },
+            text = { Text("Other invoices remain linked. This does not change stock or accounting values.") },
+            confirmButton = { TextButton({ vm.deletePurchaseInvoice(doc.id); removal = null }) { Text("Remove") } },
+            dismissButton = { TextButton({ removal = null }) { Text("Cancel") } }
+        )
+    }
+}
+
+private fun PurchaseInvoiceEntity.displayName(order: PurchaseOrderEntity): String =
+    if (order.invoiceSequence > 0)
+        InvoiceDocumentNaming.invoiceFileName(order.purchaseDateEpochDay, order.supplier,
+            order.invoiceSequence, invoiceOrdinal, File(filePath).extension.ifBlank { "pdf" })
+    else originalFileName.ifBlank { File(filePath).name }
+
+@Composable
+private fun FinderEmpty(title: String, detail: String) {
+    Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Icon(Icons.Default.FolderOpen, null, Modifier.size(38.dp))
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(detail, style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+private sealed interface PreviewResult {
+    data object Loading : PreviewResult
+    data class Ready(val bitmap: Bitmap, val pages: Int) : PreviewResult
+    data class Failed(val message: String) : PreviewResult
+}
+
+/** On-device PDF/image preview. No external viewer or explicit file download required. */
+@Composable
+private fun InvoiceFilePreview(path: String, name: String, onClose: () -> Unit) {
+    var page by remember(path) { mutableIntStateOf(0) }
+    val result by produceState<PreviewResult>(PreviewResult.Loading, path, page) {
+        value = PreviewResult.Loading
+        value = withContext(Dispatchers.IO) {
+            runCatching { renderInvoicePage(File(path), page) }
+                .getOrElse { PreviewResult.Failed(it.message ?: "Unable to open this invoice") }
+        }
+    }
+    Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.fillMaxSize()) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(name, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium, maxLines = 2)
+                    IconButton(onClose) { Icon(Icons.Default.Close, "Close preview") }
+                }
+                HorizontalDivider()
+                when (val state = result) {
+                    PreviewResult.Loading -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
+                    is PreviewResult.Failed -> Box(Modifier.weight(1f).fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                        Text(state.message)
+                    }
+                    is PreviewResult.Ready -> {
+                        Image(state.bitmap.asImageBitmap(), contentDescription = "Invoice page " + (page + 1),
+                            modifier = Modifier.fillMaxWidth().weight(1f).padding(8.dp),
+                            contentScale = ContentScale.Fit)
+                        if (state.pages > 1) Row(
+                            Modifier.fillMaxWidth().padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            OutlinedButton({ page-- }, enabled = page > 0) { Text("Previous") }
+                            Text((page + 1).toString() + " / " + state.pages)
+                            OutlinedButton({ page++ }, enabled = page < state.pages - 1) { Text("Next") }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun renderInvoicePage(file: File, page: Int): PreviewResult {
+    require(file.isFile) { "Invoice file is missing from this device" }
+    if (file.extension.equals("pdf", ignoreCase = true)) {
+        ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+            PdfRenderer(fd).use { pdf ->
+                require(pdf.pageCount > 0) { "PDF has no pages" }
+                pdf.openPage(page.coerceIn(0, pdf.pageCount - 1)).use { p ->
+                    val factor = minOf(2f, 1300f / p.width, 1800f / p.height)
+                    val image = Bitmap.createBitmap((p.width * factor).toInt().coerceAtLeast(1),
+                        (p.height * factor).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+                    image.eraseColor(Color.WHITE)
+                    p.render(image, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    return PreviewResult.Ready(image, pdf.pageCount)
+                }
+            }
+        }
+    }
+    if (file.extension.lowercase() in setOf("png", "jpg", "jpeg")) {
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(file.absolutePath, bounds)
+        require(bounds.outWidth > 0 && bounds.outHeight > 0) { "Cannot read image" }
+        var sample = 1
+        while (bounds.outWidth / sample > 1800 || bounds.outHeight / sample > 1800) sample *= 2
+        val image = requireNotNull(BitmapFactory.decodeFile(file.absolutePath,
+            BitmapFactory.Options().apply { inSampleSize = sample })) { "Image cannot be opened" }
+        return PreviewResult.Ready(image, 1)
+    }
+    return PreviewResult.Failed("Preview supports PDF, PNG and JPEG files.")
+}
