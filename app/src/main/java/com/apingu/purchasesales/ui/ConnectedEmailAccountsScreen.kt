@@ -147,6 +147,27 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
                             Icon(Icons.Default.Login, null)
                             Text(" Connect Outlook")
                         }
+                        Text("Connect Outlook opens the full system browser for a more reliable " +
+                            "Microsoft sign-in. If it doesn't complete, try the alternative " +
+                            "browser-tab flow below.", style = MaterialTheme.typography.bodySmall)
+                        OutlinedButton(
+                            onClick = {
+                                runCatching {
+                                    MailOAuth.startMicrosoftAuthorization(
+                                        activity, useExternalBrowser = false
+                                    )
+                                }.onFailure {
+                                    diagnostic = it.message ?: "Alternative Microsoft sign-in could not start."
+                                    vm.reportMailboxError(diagnostic)
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = MailConnectionSettings.isValidMicrosoftClientId(
+                                MailConnectionSettings.microsoftClientId(context))
+                        ) {
+                            Icon(Icons.Default.OpenInBrowser, null)
+                            Text(" Try browser-tab sign-in instead")
+                        }
                         if (!MailConnectionSettings.isValidMicrosoftClientId(
                                 MailConnectionSettings.microsoftClientId(context))) {
                             Text("Outlook requires the app owner to configure a Microsoft sign-in registration once. " +
