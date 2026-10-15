@@ -159,7 +159,7 @@ object MailOAuth {
                 else if (!result.accessToken.isNullOrBlank()) complete(result.accessToken!!)
                 else error("Google did not issue an access token")
             }
-            .addOnFailureListener { error(it.message ?: "Google authorisation failed") }
+            .addOnFailureListener { error(googleAuthorizationError(it)) }
     }
 
     /**
