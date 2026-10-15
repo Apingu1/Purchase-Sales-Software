@@ -8,6 +8,7 @@ on:
       - feature/invoice-finder-ui
       - feature/invoice-finder-email-dropbox
       - feature/mail-oauth-connection-fix
+      - feature/gmail-imap-app-password-outlook
   pull_request:
     branches:
       - main
