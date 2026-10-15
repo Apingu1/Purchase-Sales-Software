@@ -214,7 +214,7 @@ fun ImeiSelectionOverlay() {
     )
 }
 
-private const val WHATS_NEW_VERSION = "2026-10-13-business-prefix-credit-delete-v1"
+private const val WHATS_NEW_VERSION = "2026-10-15-multi-invoice-finder-mail-v1"
 
 @Composable
 fun WhatsNewNotice() {
@@ -236,7 +236,17 @@ fun WhatsNewNotice() {
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("13 October 2026 update", fontWeight = FontWeight.Bold)
+                Text("15 October 2026 update", fontWeight = FontWeight.Bold)
+                Text("• Multiple supplier invoices: attach and manage more than one PDF or image invoice against a single purchase order, including split invoices. Add multiple documents at once, preview each one and avoid duplicate attachments.")
+                Text("• Invoice Finder: a dedicated invoice centre with Pending Review, Approved and Missing tabs. Run an on-demand search for missing invoices by order number against ONLY the exact purchasing email account recorded on each purchase.")
+                Text("• Review before saving: preview PDF, JPG/JPEG and PNG attachments found in email, then approve or reject candidates. Approved invoices are associated with their original purchase; nothing is approved automatically.")
+                Text("• Gmail integration: connect individual personal Gmail accounts with Google App Passwords. The built-in ? help explains how to enable 2-Step Verification (2FA), generate an App Password and open Google's official setup pages.")
+                Text("• Outlook / Hotmail integration: connect multiple Microsoft accounts through Microsoft's secure browser sign-in. The app's own public sign-in identifier is now included, so friends and family do not have to enter developer settings or API keys.")
+                Text("• Dropbox invoice sync: each approved purchase invoice is included in its correct accounting-period folder. Additional documents use 'Invoice 2', 'Invoice 3' and so on, with deletions queued for the next sync.")
+                Text("• Invoice Finder only searches on request; each connected mailbox is managed separately on its own phone.")
+                androidx.compose.material3.HorizontalDivider()
+                Text("Previously added — 13 October 2026", fontWeight = FontWeight.Bold)
+
                 Text("• Business Details now supports an optional business invoice identifier. For example, MSG with customer code CUS produces automatic invoice numbers such as MSG.CUS.131026.01.")
                 Text("• Existing sales invoices are not renamed, and manual invoice numbering continues to work exactly as before.")
                 Text("• Credit notes can now be deleted. Deleting a credit note removes its sales/VAT adjustment and reverses any stock, COGS and IMEI/serial return created by that credit note.")
