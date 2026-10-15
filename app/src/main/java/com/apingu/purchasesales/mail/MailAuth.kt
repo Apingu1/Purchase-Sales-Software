@@ -85,70 +85,12 @@ object MailOAuth {
         )
     }
 
-    private var activeMicrosoftService: AuthorizationService? = null
-
     /**
-     * Use explicit completion AND cancellation callbacks rather than an activity result.
-     * Android may recreate the Compose screen while the external Microsoft browser is open.
-     * AppAuth returns a filled-in PendingIntent with the OAuth response, even after recreation.
+     * Microsoft browser management is delegated to our own OAuth callback receiver.
+     * AppAuth still handles PKCE request creation, token exchange and refresh.
      */
-    @Synchronized
-    fun startMicrosoftAuthorization(activity: Activity, useExternalBrowser: Boolean = true) {
-        val clientId = MailConnectionSettings.microsoftClientId(activity)
-        require(MailConnectionSettings.isValidMicrosoftClientId(clientId)) {
-            "The app owner must configure the Microsoft Entra public client ID before signing in"
-        }
-        val request = MicrosoftAuthorizationRequest.Builder(
-            configuration, clientId,
-            ResponseTypeValues.CODE, Uri.parse(MS_REDIRECT)
-        ).setScope(MS_SCOPES).setPrompt("select_account").build()
-
-        // AppAuth must add authorization response/error extras to the callback PendingIntent.
-        // Both targets are explicit, non-exported components of our own app.
-        val flags = android.app.PendingIntent.FLAG_UPDATE_CURRENT or
-            (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
-                android.app.PendingIntent.FLAG_MUTABLE else 0)
-        val success = android.app.PendingIntent.getActivity(
-            activity, 6401,
-            Intent(activity, MicrosoftOAuthResultActivity::class.java).apply {
-                action = MicrosoftOAuthResultActivity.ACTION_COMPLETE
-            }, flags
-        )
-        val cancelled = android.app.PendingIntent.getActivity(
-            activity, 6402,
-            Intent(activity, MicrosoftOAuthResultActivity::class.java).apply {
-                action = MicrosoftOAuthResultActivity.ACTION_CANCEL
-            }, flags
-        )
-        activeMicrosoftService?.dispose()
-        // A full system-browser activity does not share the fragile Custom Tab
-        // task stack on some devices / account-chooser and authenticator handoffs.
-        // Keep AppAuth PKCE, redirect verification and token exchange unchanged.
-        // A Custom Tab remains available as an explicit fallback in the UI.
-        val service = if (useExternalBrowser) {
-            val config = net.openid.appauth.AppAuthConfiguration.Builder()
-                .setBrowserMatcher(net.openid.appauth.browser.BrowserMatcher { browser ->
-                    !browser.useCustomTab
-                })
-                .build()
-            AuthorizationService(activity, config)
-        } else {
-            AuthorizationService(activity)
-        }
-        activeMicrosoftService = service
-        try {
-            service.performAuthorizationRequest(request, success, cancelled)
-        } catch (ex: Exception) {
-            service.dispose()
-            activeMicrosoftService = null
-            throw ex
-        }
-    }
-
-    @Synchronized
-    fun finishMicrosoftAuthorization() {
-        activeMicrosoftService?.dispose()
-        activeMicrosoftService = null
+    fun startMicrosoftAuthorization(activity: Activity) {
+        MicrosoftOAuthBrowser.start(activity)
     }
 
     suspend fun completeMicrosoft(context: Context, data: Intent): Pair<String, String> {
