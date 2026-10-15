@@ -348,6 +348,10 @@ interface AppDao {
     suspend fun getInvoiceCandidate(id: Long): InvoiceCandidateEntity?
     @Query("DELETE FROM invoice_candidates WHERE purchaseOrderId = :orderId")
     suspend fun clearInvoiceCandidates(orderId: Long)
+    @Query("SELECT * FROM invoice_candidates WHERE purchaseOrderId = :orderId AND status = 'PENDING_REVIEW'")
+    suspend fun getPendingInvoiceCandidatesForOrder(orderId: Long): List<InvoiceCandidateEntity>
+    @Query("DELETE FROM invoice_candidates WHERE purchaseOrderId = :orderId AND status = 'PENDING_REVIEW'")
+    suspend fun clearPendingInvoiceCandidates(orderId: Long)
 
     @Query("SELECT * FROM purchases ORDER BY purchaseDateEpochDay DESC, id DESC") fun observePurchases(): Flow<List<PurchaseEntity>>
     @Query("SELECT * FROM purchases ORDER BY purchaseDateEpochDay ASC, id ASC") suspend fun getPurchases(): List<PurchaseEntity>

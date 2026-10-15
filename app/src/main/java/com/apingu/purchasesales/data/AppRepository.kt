@@ -251,6 +251,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         }
         val oldDropboxOrder = if (draft.id > 0) dao.getPurchaseOrder(draft.id) else null
         val oldDropboxDocuments = if (draft.id > 0) dao.getPurchaseInvoices(draft.id) else emptyList()
+        val oldPendingCandidates = if (draft.id > 0) dao.getPendingInvoiceCandidatesForOrder(draft.id) else emptyList()
         val attachmentName = attachmentUri?.let { PurchaseInvoiceFiles.originalName(context, it) }.orEmpty()
         val attachmentFingerprint = try {
             copiedInvoice?.let(PurchaseInvoiceFiles::fingerprint)
@@ -290,6 +291,14 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             val savedOrderId = if (existingOrder == null) dao.insertPurchaseOrder(header) else {
                 dao.updatePurchaseOrder(header)
                 header.id
+            }
+            if (existingOrder != null && (
+                existingOrder.orderNumber.trim() != header.orderNumber ||
+                !existingOrder.accountUsername.trim().equals(header.accountUsername, ignoreCase = true)
+            )) {
+                // A candidate found for the OLD mailbox/reference must never be
+                // approved against the edited purchase.
+                dao.clearPendingInvoiceCandidates(savedOrderId)
             }
 
             if (copiedInvoice != null) {
@@ -390,6 +399,12 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             // An invalid purchase must not leave an unattached copy on disk.
             copiedInvoice?.let { File(it).delete() }
             throw error
+        }
+        if (oldDropboxOrder != null && (
+            oldDropboxOrder.orderNumber.trim() != draft.orderNumber.trim() ||
+            !oldDropboxOrder.accountUsername.trim().equals(draft.accountUsername.trim(), ignoreCase = true)
+        )) {
+            oldPendingCandidates.forEach { InvoiceCandidateCache.discard(context, it.id) }
         }
         if (oldDropboxOrder != null) {
             val old = oldDropboxOrder

@@ -65,6 +65,10 @@ class InvoiceEmailFinder(private val context: Context, private val db: AppDataba
                         // Repeat eligibility inside transaction: a newly approved invoice
                         // must not receive further email candidates.
                         val current = dao.getPurchaseOrder(order.id) ?: return@withTransaction 0L
+                        if (current.orderNumber.trim() != order.orderNumber.trim() ||
+                            !current.accountUsername.trim().equals(mailbox.emailAddress, ignoreCase = true)) {
+                            return@withTransaction 0L
+                        }
                         if (InvoiceFinderRules.blockReason(current, dao.getAllPurchaseInvoices(),
                                 dao.getEmailAccounts()) != null) return@withTransaction 0L
                         val candidate = InvoiceCandidateEntity(
