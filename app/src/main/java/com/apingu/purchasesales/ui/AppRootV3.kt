@@ -117,6 +117,7 @@ private fun AppNavigationV3(nav: NavHostController, vm: AppViewModel) {
             composable("reports") { ReportsScreen(vm, nav) }
             composable("documents") { DocumentsScreen(vm, nav) }
             composable("invoice-finder") { InvoiceFinderScreen(vm, nav) }
+            composable("email-accounts") { ConnectedEmailAccountsScreen(vm, nav) }
             composable("invoice-finder/purchase/{id}") {
                 InvoicePurchaseDetailScreen(vm, nav,
                     it.arguments?.getString("id")?.toLongOrNull() ?: 0L)

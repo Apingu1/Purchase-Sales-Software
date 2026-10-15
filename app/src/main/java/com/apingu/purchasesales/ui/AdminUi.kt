@@ -158,6 +158,11 @@ fun BusinessScreen(vm: AppViewModel, nav: NavHostController) {
         Text(if (autoInvoiceNumber) "On — invoice numbers are generated automatically from the business identifier (when set), customer invoice code and sale date." else "Off — the Sales modal will show an Invoice number field so you can enter your own unique invoice number.", style = MaterialTheme.typography.bodySmall)
         HorizontalDivider()
         AccountingPeriodsManager(vm)
+        Text("Connected Purchasing Email Accounts", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+        OutlinedButton(onClick = { nav.navigate("email-accounts") }, modifier = Modifier.fillMaxWidth()) {
+            Icon(Icons.Default.MarkEmailRead, null); Text(" Manage connected mailboxes")
+        }
+        Text("Link each purchasing mailbox independently. Only an exact email match against the purchase record is searched.", style = MaterialTheme.typography.bodySmall)
         HorizontalDivider(); Text("Dropbox", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold); Text("The simplest setup is to paste a generated Dropbox access token for your own account.", style = MaterialTheme.typography.bodySmall)
         Text("Each purchase invoice, sales PDF, expense receipt and Excel workbook is automatically placed under its matching Accounting Periods/<period name>/ folder based on the transaction date.", style = MaterialTheme.typography.bodySmall)
         TextButton(onClick = { showDropboxTokenHelp = true }, contentPadding = PaddingValues(0.dp)) { Icon(Icons.Default.HelpOutline, null); Spacer(Modifier.width(6.dp)); Text("How do I get an access token?") }

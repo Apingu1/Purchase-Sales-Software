@@ -32,14 +32,27 @@ object DocumentStore {
         return out.absolutePath
     }
 
-    fun exportAllDocuments(context: Context, treeUri: Uri, purchases: List<PurchaseEntity>, sales: List<SaleEntity>, creditNotes: List<CreditNoteEntity>, expenses: List<ExpenseEntity>): Int {
+    fun exportAllDocuments(context: Context, treeUri: Uri, purchases: List<PurchaseEntity>, sales: List<SaleEntity>, creditNotes: List<CreditNoteEntity>, expenses: List<ExpenseEntity>, approvedInvoices: List<PurchaseInvoiceEntity> = emptyList(), orders: List<PurchaseOrderEntity> = emptyList()): Int {
         val root = DocumentFile.fromTreeUri(context, treeUri) ?: return 0
         val pDir = root.findFile("Purchases") ?: root.createDirectory("Purchases")
         val sDir = root.findFile("Sales") ?: root.createDirectory("Sales")
         val cDir = root.findFile("Credit Notes") ?: root.createDirectory("Credit Notes")
         val eDir = root.findFile("Expenses") ?: root.createDirectory("Expenses")
         var count = 0
-        purchases.forEach { p -> p.invoicePath?.let { if (copyFile(context, File(it), pDir, "PUR_${p.id}_${safe(p.item)}")) count++ } }
+        val byOrder = orders.associateBy { it.id }
+        val covered = approvedInvoices.map { it.purchaseOrderId }.toSet()
+        approvedInvoices.forEach { doc ->
+            val order = byOrder[doc.purchaseOrderId] ?: return@forEach
+            val file = File(doc.filePath)
+            val seq = order.invoiceSequence.takeIf { it > 0 } ?: order.id.toInt()
+            val name = InvoiceDocumentNaming.invoiceFileName(order.purchaseDateEpochDay, order.supplier,
+                seq, doc.invoiceOrdinal, file.extension.ifBlank { "pdf" })
+            if (copyFile(context, file, pDir, name)) count++
+        }
+        // Backward-compatible export for pre-migration orderless invoice paths.
+        purchases.filter { it.purchaseOrderId !in covered }.forEach { p ->
+            p.invoicePath?.let { if (copyFile(context, File(it), pDir, "PUR_${p.id}_${safe(p.item)}")) count++ }
+        }
         sales.forEach { s -> s.pdfPath?.let { if (copyFile(context, File(it), sDir, "${s.invoiceNo}.pdf")) count++ } }
         creditNotes.forEach { c -> c.pdfPath?.let { if (copyFile(context, File(it), cDir, "${c.creditNoteNo}.pdf")) count++ } }
         expenses.forEach { e -> e.attachmentPath?.let { if (copyFile(context, File(it), eDir, "EXP_${e.id}_${safe(e.details)}")) count++ } }

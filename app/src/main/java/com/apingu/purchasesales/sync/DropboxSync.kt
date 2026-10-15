@@ -28,6 +28,8 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
 
             val periods = dao.getAccountingPeriods()
             val purchases = dao.getPurchases()
+            val orders = dao.getPurchaseOrders()
+            val approvedInvoices = dao.getAllPurchaseInvoices()
             val customers = dao.getCustomers()
             val sales = dao.getSales()
             val saleLines = dao.getSaleLines()
@@ -135,18 +137,31 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
                 )
                 DropboxApi.upload(token, "$periodRoot/Excel/${xlsx.name}", xlsx.readBytes())
 
-                val purchaseOrderGroups = periodPurchases.groupBy { p -> p.purchaseOrderId.takeIf { it > 0 } ?: -p.id }
-                purchaseOrderGroups.values.forEach { lines ->
-                    val voidedOrder = isFullyRefundedOrderForDropbox(lines)
-                    lines.forEach { p ->
-                        p.invoicePath?.let { path ->
-                            val f = File(path)
-                            val remotePath = "$periodRoot/Purchases/Invoices/PUR_${p.id}_${safe(p.item)}.${f.extension.ifBlank { "bin" }}"
-                            if (voidedOrder) DropboxApi.deleteIfExists(token, remotePath)
-                            else if (f.exists()) DropboxApi.upload(token, remotePath, f.readBytes())
+                // Order-level approved documents; refunded orders retain accounting evidence.
+                orders.filter { it.purchaseDateEpochDay in period.startEpochDay..period.endEpochDay }
+                    .forEach { order ->
+                        val documents = approvedInvoices.filter { it.purchaseOrderId == order.id }
+                        documents.forEach { invoice ->
+                            val file = File(invoice.filePath)
+                            if (file.isFile) {
+                                val name = InvoiceDocumentNaming.invoiceFileName(
+                                    order.purchaseDateEpochDay, order.supplier,
+                                    order.invoiceSequence.takeIf { it > 0 } ?: order.id.toInt(),
+                                    invoice.invoiceOrdinal, file.extension.ifBlank { "pdf" })
+                                DropboxApi.upload(token, "$periodRoot/Purchases/Invoices/$name", file.readBytes())
+                            }
+                        }
+                        // Only retire old per-stock-line filenames after all new copies exist.
+                        if (documents.isNotEmpty() && documents.all { File(it.filePath).isFile }) {
+                            periodPurchases.filter { it.purchaseOrderId == order.id }.forEach { p ->
+                                p.invoicePath?.let { old ->
+                                    val file = File(old)
+                                    DropboxApi.deleteIfExists(token,
+                                        "$periodRoot/Purchases/Invoices/PUR_${p.id}_${safe(p.item)}.${file.extension.ifBlank { "bin" }}")
+                                }
+                            }
                         }
                     }
-                }
 
                 periodSales.forEach { s ->
                     s.pdfPath?.let { path ->
@@ -242,7 +257,17 @@ object DropboxApi {
         return stream?.bufferedReader()?.use { it.readText() }.orEmpty()
     }
     private fun enc(v: String) = URLEncoder.encode(v, "UTF-8")
-    private fun json(v: String) = v.replace("\\", "\\\\").replace("\"", "\\\"")
+    private fun json(v: String) = buildString {
+        v.forEach { ch ->
+            when (ch) {
+                92.toChar() -> append(92.toChar()).append(92.toChar())
+                34.toChar() -> append(92.toChar()).append(34.toChar())
+                else -> if (ch.code < 32 || ch.code > 126) {
+                    append(92.toChar()).append("u%04x".format(ch.code))
+                } else append(ch)
+            }
+        }
+    }
 }
 
 private fun safePeriod(period: AccountingPeriodEntity): String =

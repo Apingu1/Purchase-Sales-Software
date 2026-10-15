@@ -6,6 +6,7 @@ on:
       - main
       - feature/android-v1-complete
       - feature/invoice-finder-ui
+      - feature/invoice-finder-email-dropbox
   pull_request:
     branches:
       - main
@@ -75,6 +76,8 @@ jobs:
 
       - name: Run JVM unit tests and build debug APK
         if: steps.project.outputs.present == 'true'
+        env:
+          PURCHASE_SALES_MS_CLIENT_ID: ${{ secrets.PURCHASE_SALES_MS_CLIENT_ID }}
         run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
 
       - name: Verify persistent APK signature
