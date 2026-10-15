@@ -3,4 +3,5 @@
     <!-- Keystore-encrypted tokens cannot be restored on another device. -->
     <exclude domain="sharedpref" path="purchase_sales_imap_secrets.xml" />
     <exclude domain="sharedpref" path="mail_oauth_state.xml" />
+    <exclude domain="sharedpref" path="purchase_sales_microsoft_pending_oauth.xml" />
 </full-backup-content>
