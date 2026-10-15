@@ -9,9 +9,7 @@ val ciVersionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 val ciKeystorePath = System.getenv("PURCHASE_SALES_KEYSTORE_PATH")
 // Microsoft Entra Application (client) ID is a PUBLIC OAuth identifier, not a secret.
 // Embed a working default in every APK so friends can simply tap Connect Outlook.
-val microsoftPublicClientId = System.getenv("PURCHASE_SALES_MS_CLIENT_ID")
-    ?.trim()?.takeIf { it.isNotBlank() }
-    ?: "4f0b4647-34ae-4597-af86-f58a24678361"
+val microsoftPublicClientId = "4f0b4647-34ae-4597-af86-f58a24678361"
 
 android {
     namespace = "com.apingu.purchasesales"
