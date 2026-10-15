@@ -38,14 +38,24 @@ class InvoiceEmailFinder(private val context: Context, private val db: AppDataba
         var skipped = 0
         val tokens = mutableMapOf<String, String>()
         val imapSessions = mutableMapOf<String, GmailImapSession>()
+        var activeImapAccount: String? = null
         try {
-        orders.forEach { order ->
+        // Group by purchasing mailbox, so one IMAP connection is reused for
+        // that mailbox's 20–30 purchases and closed before moving to the next.
+        orders.sortedBy { it.accountUsername.trim().lowercase(java.util.Locale.ROOT) }
+            .forEach { order ->
             val blocker = InvoiceFinderRules.blockReason(order, approved, accounts)
             if (blocker != null) { skipped++; return@forEach }
             val mailbox = accounts.first { it.emailAddress.equals(order.accountUsername.trim(), true) }
             try {
+                val imapKey = mailbox.emailAddress.lowercase(java.util.Locale.ROOT)
+                if (activeImapAccount != imapKey) {
+                    imapSessions.values.forEach { runCatching { it.close() } }
+                    imapSessions.clear()
+                    activeImapAccount = imapKey
+                }
                 val imap = if (mailbox.provider == "GMAIL_IMAP") {
-                    imapSessions.getOrPut(mailbox.emailAddress.lowercase()) {
+                    imapSessions.getOrPut(imapKey) {
                         GmailImapSession(mailbox.emailAddress,
                             GmailImapCredentials.load(context, mailbox.emailAddress))
                     }
