@@ -531,10 +531,6 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val affectedLegacyLines = dao.getPurchasesForOrder(order.id)
             .filter { it.invoicePath == invoice.filePath }
         val legacySlot = order.invoicePath == invoice.filePath || affectedLegacyLines.isNotEmpty()
-        DropboxDeletionQueue.enqueuePurchase(context, order.purchaseDateEpochDay,
-            InvoiceDocumentNaming.invoiceFileName(order.purchaseDateEpochDay, order.supplier,
-                order.invoiceSequence.takeIf { it > 0 } ?: order.id.toInt(),
-                invoice.invoiceOrdinal, File(invoice.filePath).extension.ifBlank { "pdf" }))
         db.withTransaction {
             dao.deletePurchaseInvoice(invoice)
             if (legacySlot) {
@@ -544,6 +540,11 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 }
             }
         }
+        // Queue Dropbox deletion only after the local database change commits.
+        DropboxDeletionQueue.enqueuePurchase(context, order.purchaseDateEpochDay,
+            InvoiceDocumentNaming.invoiceFileName(order.purchaseDateEpochDay, order.supplier,
+                order.invoiceSequence.takeIf { it > 0 } ?: order.id.toInt(),
+                invoice.invoiceOrdinal, File(invoice.filePath).extension.ifBlank { "pdf" }))
         if (legacySlot) {
             val remoteLines = affectedLegacyLines.ifEmpty { dao.getPurchasesForOrder(order.id).take(1) }
             remoteLines.forEach { line ->
