@@ -32,6 +32,11 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
     val activity = context as ComponentActivity
     val accounts by vm.emailAccounts.collectAsStateWithLifecycle()
     var disconnect by remember { mutableStateOf<EmailAccountEntity?>(null) }
+    var connectionProblem by remember { mutableStateOf("") }
+    fun showConnectionProblem(message: String) {
+        connectionProblem = message
+        vm.reportMailboxError(message)
+    }
     var googleAddress by remember { mutableStateOf("") }
     var requestedGoogleAddress by remember { mutableStateOf("") }
     var microsoftClientId by remember { mutableStateOf(MailConnectionSettings.microsoftClientId(context)) }
@@ -48,16 +53,16 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
         if (data != null) {
             runCatching { MailOAuth.googleTokenFromIntent(context, data) }
                 .onSuccess { vm.connectGmailToken(it, requestedGoogleAddress) }
-                .onFailure { vm.reportMailboxError(MailOAuth.googleAuthorizationError(it)) }
+                .onFailure { showConnectionProblem(MailOAuth.googleAuthorizationError(it)) }
         } else if (result.resultCode == Activity.RESULT_CANCELED) {
-            vm.reportMailboxError(
+            showConnectionProblem(
                 "Google account selection ended without an authorization response. " +
                     "If you selected an account (rather than pressing Back), check the " +
                     "Google Cloud Android OAuth client, the APK signing SHA-1 shown below, " +
                     "and that this Gmail account is an authorized test user."
             )
         } else {
-            vm.reportMailboxError("Google did not return an authorization result (Android result " +
+            showConnectionProblem("Google did not return an authorization result (Android result " +
                 result.resultCode + "). Check Google Cloud configuration.")
         }
     }
@@ -65,7 +70,7 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.data != null) vm.completeMicrosoftConnection(result.data!!)
-        else vm.reportMailboxError("Microsoft sign-in was cancelled")
+        else showConnectionProblem("Microsoft sign-in was cancelled")
     }
     Scaffold(
         topBar = { TopAppBar(title = { Text("Connected Email Accounts") },
@@ -79,6 +84,17 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
             contentPadding = PaddingValues(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            if (connectionProblem.isNotBlank()) item {
+                ElevatedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Account connection diagnostic", fontWeight = FontWeight.SemiBold)
+                        Text(connectionProblem, style = MaterialTheme.typography.bodyMedium)
+                        OutlinedButton(onClick = { connectionProblem = "" }) {
+                            Text("Dismiss")
+                        }
+                    }
+                }
+            }
             item {
                 Text("Purchasing mailboxes", style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.SemiBold)
@@ -123,7 +139,7 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
                 OutlinedButton(onClick = {
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                     clipboard.setPrimaryClip(ClipData.newPlainText("Android APK SHA-1", installedSha1))
-                    vm.reportMailboxError("APK signing SHA-1 copied")
+                    showConnectionProblem("APK signing SHA-1 copied")
                 }) { Icon(Icons.Default.ContentCopy, null); Text(" Copy APK SHA-1") }
                 Text("Gmail API must be enabled and gmail.readonly consent configured. If your Google OAuth app is in testing, add each purchasing Google account as a test user.",
                     style = MaterialTheme.typography.bodySmall)
@@ -142,8 +158,8 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
                 )
                 OutlinedButton(onClick = {
                     runCatching { MailConnectionSettings.saveMicrosoftClientId(context, microsoftClientId) }
-                        .onSuccess { vm.reportMailboxError("Microsoft client ID saved on this device") }
-                        .onFailure { vm.reportMailboxError(it.message ?: "Invalid Microsoft client ID") }
+                        .onSuccess { showConnectionProblem("Microsoft client ID saved on this device") }
+                        .onFailure { showConnectionProblem(it.message ?: "Invalid Microsoft client ID") }
                 }, enabled = MailConnectionSettings.isValidMicrosoftClientId(microsoftClientId)) {
                     Icon(Icons.Default.Save, null); Text(" Save client ID")
                 }
@@ -153,7 +169,7 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
                             MailConnectionSettings.saveMicrosoftClientId(context, microsoftClientId)
                             MailOAuth.microsoftAuthIntent(activity)
                         }.onSuccess { microsoftResult.launch(it) }
-                            .onFailure { vm.reportMailboxError(it.message ?: "Microsoft registration is incomplete") }
+                            .onFailure { showConnectionProblem(it.message ?: "Microsoft registration is incomplete") }
                     }, modifier = Modifier.fillMaxWidth()
                 ) { Icon(Icons.Default.Add, null); Text(" Connect Outlook / Microsoft 365") }
                 if (!MailConnectionSettings.isValidMicrosoftClientId(microsoftClientId)) {
