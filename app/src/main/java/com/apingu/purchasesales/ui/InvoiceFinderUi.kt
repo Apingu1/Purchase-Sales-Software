@@ -42,6 +42,7 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
     val orders by vm.purchaseOrders.collectAsStateWithLifecycle()
     val docs by vm.purchaseInvoices.collectAsStateWithLifecycle()
     val suggestions by vm.pendingInvoiceCandidates.collectAsStateWithLifecycle()
+    val accounts by vm.emailAccounts.collectAsStateWithLifecycle()
     var tab by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
     var target by remember { mutableStateOf<Long?>(null) }
@@ -165,10 +166,8 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
                         items(filtered, key = { it.id }) { order ->
                             val label = when {
                                 suggestions.any { it.purchaseOrderId == order.id } -> "Awaiting review"
-                                order.orderNumber.isBlank() -> "Order number required"
-                                order.accountUsername.isBlank() -> "Purchasing email required"
-                                !order.accountUsername.contains('@') -> "Valid email address required"
-                                else -> "No approved invoice attached"
+                                else -> InvoiceFinderRules.blockReason(order, docs, accounts)
+                                    ?: "Ready to search when email integration is enabled"
                             }
                             FinderOrderCard(order, label, "Missing",
                                 { nav.navigate("purchase/" + order.id) }, { addInvoice(order.id) })

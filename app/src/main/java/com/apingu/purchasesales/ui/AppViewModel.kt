@@ -25,6 +25,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     val purchases = repo.purchases.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val purchaseInvoices = repo.purchaseInvoices.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val pendingInvoiceCandidates = repo.pendingInvoiceCandidates.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val emailAccounts = repo.emailAccounts.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val sales = repo.sales.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val saleLines = repo.saleLines.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val allocations = repo.allocations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
