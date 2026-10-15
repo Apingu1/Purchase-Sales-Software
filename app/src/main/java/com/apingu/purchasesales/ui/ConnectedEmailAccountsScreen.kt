@@ -160,28 +160,47 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
                                 color = MaterialTheme.colorScheme.error,
                                 style = MaterialTheme.typography.bodySmall)
                         }
-                        TextButton(onClick = { showOwnerSetup = !showOwnerSetup }) {
-                            Text(if (showOwnerSetup) "Hide app-owner setup" else "App-owner configuration")
-                        }
-                        if (showOwnerSetup) {
-                            Text("Only the person configuring the software needs this public Microsoft " +
-                                "Application (client) ID. For distribution, embed it into the APK build instead.",
-                                style = MaterialTheme.typography.bodySmall)
-                            OutlinedTextField(value = microsoftClientId,
-                                onValueChange = { microsoftClientId = it.trim() },
-                                label = { Text("Microsoft Application (client) ID") },
-                                modifier = Modifier.fillMaxWidth(), singleLine = true)
-                            Text("Redirect URI: " + MailOAuth.MS_REDIRECT,
-                                style = MaterialTheme.typography.bodySmall)
-                            OutlinedButton(
-                                onClick = {
-                                    runCatching { MailConnectionSettings.saveMicrosoftClientId(
-                                        context, microsoftClientId) }
-                                        .onSuccess { diagnostic = "Microsoft configuration saved on this device." }
-                                        .onFailure { diagnostic = it.message ?: "Invalid client ID" }
-                                },
-                                enabled = MailConnectionSettings.isValidMicrosoftClientId(microsoftClientId)
-                            ) { Icon(Icons.Default.Save, null); Text(" Save configuration") }
+                        if (MailConnectionSettings.hasEmbeddedMicrosoftClientId()) {
+                            Text(
+                                "Ready to connect. Your Microsoft sign-in configuration is " +
+                                    "included in this app — no developer settings or API keys needed.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        } else {
+                            TextButton(onClick = { showOwnerSetup = !showOwnerSetup }) {
+                                Text(if (showOwnerSetup) "Hide app-owner setup" else "App-owner configuration")
+                            }
+                            if (showOwnerSetup) {
+                                Text(
+                                    "Only the app owner needs the public Microsoft Application " +
+                                        "(client) ID. Other users never need account-specific API keys.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                OutlinedTextField(
+                                    value = microsoftClientId,
+                                    onValueChange = { microsoftClientId = it.trim() },
+                                    label = { Text("Microsoft Application (client) ID") },
+                                    modifier = Modifier.fillMaxWidth(), singleLine = true
+                                )
+                                Text("Redirect URI: " + MailOAuth.MS_REDIRECT,
+                                    style = MaterialTheme.typography.bodySmall)
+                                OutlinedButton(
+                                    onClick = {
+                                        runCatching {
+                                            MailConnectionSettings.saveMicrosoftClientId(context, microsoftClientId)
+                                        }.onSuccess {
+                                            diagnostic = "Microsoft configuration saved on this device."
+                                        }.onFailure {
+                                            diagnostic = it.message ?: "Invalid client ID"
+                                        }
+                                    },
+                                    enabled = MailConnectionSettings.isValidMicrosoftClientId(microsoftClientId)
+                                ) {
+                                    Icon(Icons.Default.Save, null)
+                                    Text(" Save configuration")
+                                }
+                            }
                         }
                     }
                 }
