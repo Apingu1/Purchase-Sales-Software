@@ -29,7 +29,7 @@ Select **Connect Outlook** to open the official Microsoft login portal via Andro
 
 `com.apingu.purchasesales://oauth2redirect`
 
-For the normal user-facing **Connect Outlook** button to work without entering any settings on each friend's phone, set the GitHub Actions secret `PURCHASE_SALES_MS_CLIENT_ID` to that application's PUBLIC client ID, then create and distribute the signed APK. If the owner has not done this, the app shows an explanatory message and optional **App-owner configuration** section. There are no per-user developer IDs or app keys. The Microsoft sign-in code is present; connection and provider consent have not been live tested with user accounts.
+**Connected and confirmed on a user's Android phone (15 October 2026).** The public Microsoft Entra Application (client) ID `4f0b4647-34ae-4597-af86-f58a24678361` is now embedded directly in every APK of this branch. Friends and family can just tap **Connect Outlook** and sign in through Microsoft's browser. The app-owner/client-ID configuration section is hidden when the bundled ID is valid. This is a *public OAuth identifier*, not a client secret; no mailbox-specific developer keys or setup is required. The Android sign-in uses a direct validated browser callback with PKCE, not the older AppAuth browser-management activity.
 
 ## Validation checklist
 
@@ -103,3 +103,8 @@ particular phone. If it does not, ask the user which Microsoft screen they saw
 immediately before being returned or stuck in the browser and capture any
 Microsoft error code (not authentication URLs, passwords or tokens). A crash
 logcat or Azure sign-in log may help if the phone still force-closes.
+
+
+### What's New popup
+
+The existing one-time **What's New** popup is retained in `ImeiTracking.kt`; it is not replaced with a new screen. A new notice version causes it to appear once when users install this update. The October 15 announcement covers multiple purchase invoices, Pending Review / Approved / Missing Invoice Finder tabs, Gmail App Passwords with 2FA help, Microsoft sign-in without client-ID entry, and Dropbox naming/sync. The October 13 business identifier and credit-note fixes remain listed under previous updates.
