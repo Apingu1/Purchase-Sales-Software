@@ -20,8 +20,7 @@
              PKCE before handing an authorization code to the token endpoint. -->
         <activity
             android:name=".mail.MicrosoftOAuthResultActivity"
-            android:exported="true"
-            android:launchMode="singleTop">
+            android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
