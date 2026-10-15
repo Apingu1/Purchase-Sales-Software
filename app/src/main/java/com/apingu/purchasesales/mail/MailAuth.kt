@@ -174,8 +174,8 @@ object MailOAuth {
             10 -> "Google OAuth configuration error (status 10). Check the Android OAuth client's package name, signing certificate SHA-1, Gmail API and test-user consent configuration."
             16 -> "Google authorization was cancelled (status 16). If you selected an account rather than cancelling, check its OAuth consent/test-user configuration."
             null -> "Google authorization failed: " + (cause.localizedMessage ?: "Unknown error")
-            else -> "Google authorization failed (status " + api.statusCode + "): " +
-                (api.localizedMessage ?: "Check the Google Cloud OAuth app configuration")
+            else -> "Google authorization failed (status " + (api?.statusCode ?: "unknown") + "): " +
+                (api?.localizedMessage ?: "Check the Google Cloud OAuth app configuration")
         }
     }
 
