@@ -59,6 +59,10 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    packaging.resources.excludes += setOf(
+        "/META-INF/NOTICE.md", "/META-INF/LICENSE.md",
+        "/META-INF/NOTICE.txt", "/META-INF/LICENSE.txt"
+    )
 }
 
 dependencies {
