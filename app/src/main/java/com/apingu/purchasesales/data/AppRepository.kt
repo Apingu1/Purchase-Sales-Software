@@ -131,6 +131,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     val purchases = dao.observePurchases()
     val emailAccounts = dao.observeEmailAccounts()
     val pendingInvoiceCandidates = dao.observePendingInvoiceCandidates()
+    val purchaseInvoices = dao.observeAllPurchaseInvoices()
     val sales = dao.observeSales()
     val saleLines = dao.observeSaleLines()
     val allocations = dao.observeSaleAllocations()
@@ -431,6 +432,16 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
 
     suspend fun getPurchaseInvoiceDocuments(orderId: Long): List<PurchaseInvoiceEntity> =
         dao.getPurchaseInvoices(orderId)
+
+    /** Reject a suggestion without touching the source email or an approved invoice. */
+    suspend fun rejectInvoiceCandidate(candidateId: Long) {
+        val candidate = dao.getInvoiceCandidate(candidateId) ?: error("Candidate not found")
+        require(candidate.status == "PENDING_REVIEW") { "Invoice was already reviewed" }
+        dao.updateInvoiceCandidate(candidate.copy(
+            status = "REJECTED",
+            reviewedAtMillis = System.currentTimeMillis()
+        ))
+    }
 
     /**
      * Removes exactly one document. Never delete a shared local file while another

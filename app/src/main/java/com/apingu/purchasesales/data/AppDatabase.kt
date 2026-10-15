@@ -312,6 +312,8 @@ interface AppDao {
     fun observePurchaseInvoices(orderId: Long): Flow<List<PurchaseInvoiceEntity>>
     @Query("SELECT * FROM purchase_invoices ORDER BY purchaseOrderId, invoiceOrdinal, id")
     suspend fun getAllPurchaseInvoices(): List<PurchaseInvoiceEntity>
+    @Query("SELECT * FROM purchase_invoices ORDER BY purchaseOrderId, invoiceOrdinal, id")
+    fun observeAllPurchaseInvoices(): Flow<List<PurchaseInvoiceEntity>>
     @Query("SELECT * FROM purchase_invoices WHERE purchaseOrderId = :orderId ORDER BY invoiceOrdinal, id")
     suspend fun getPurchaseInvoices(orderId: Long): List<PurchaseInvoiceEntity>
     @Query("SELECT * FROM purchase_invoices WHERE id = :id")
@@ -337,6 +339,8 @@ interface AppDao {
     fun observePendingInvoiceCandidates(): Flow<List<InvoiceCandidateEntity>>
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertInvoiceCandidate(value: InvoiceCandidateEntity): Long
     @Update suspend fun updateInvoiceCandidate(value: InvoiceCandidateEntity)
+    @Query("SELECT * FROM invoice_candidates WHERE id = :id LIMIT 1")
+    suspend fun getInvoiceCandidate(id: Long): InvoiceCandidateEntity?
     @Query("DELETE FROM invoice_candidates WHERE purchaseOrderId = :orderId")
     suspend fun clearInvoiceCandidates(orderId: Long)
 

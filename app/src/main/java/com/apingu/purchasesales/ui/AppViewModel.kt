@@ -23,6 +23,8 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     val customers = repo.customers.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val purchaseOrders = repo.purchaseOrders.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val purchases = repo.purchases.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val purchaseInvoices = repo.purchaseInvoices.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val pendingInvoiceCandidates = repo.pendingInvoiceCandidates.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val sales = repo.sales.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val saleLines = repo.saleLines.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val allocations = repo.allocations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -96,6 +98,31 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
 
     fun markReceivedAllOrder(orderId: Long) = action("Purchase received") { repo.markReceivedAllOrder(orderId) }
     fun deletePurchaseOrder(orderId: Long) = action("Purchase deleted") { repo.deletePurchaseOrder(orderId) }
+
+    fun addPurchaseInvoices(orderId: Long, uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        viewModelScope.launch {
+            var added = 0
+            var errors = 0
+            var lastError = ""
+            uris.distinct().forEach { uri ->
+                runCatching { repo.attachAdditionalPurchaseInvoice(orderId, uri) }
+                    .onSuccess { added++ }
+                    .onFailure { errors++; lastError = it.message ?: "Attachment could not be added" }
+            }
+            _message.value = when {
+                errors == 0 -> "$added invoice${if (added == 1) "" else "s"} attached"
+                added > 0 -> "$added invoices attached; $errors failed: $lastError"
+                else -> "No invoice attached: $lastError"
+            }
+        }
+    }
+
+    fun deletePurchaseInvoice(invoiceId: Long) =
+        action("Invoice removed") { repo.removePurchaseInvoiceDocument(invoiceId) }
+
+    fun rejectFoundInvoice(candidateId: Long) =
+        action("Invoice suggestion rejected") { repo.rejectInvoiceCandidate(candidateId) }
 
     fun savePurchase(value: PurchaseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) = action("Purchase saved", onSuccess) { repo.savePurchase(value, attachmentUri) }
     fun markReceivedAll(value: PurchaseEntity) = action("Purchase received") { repo.markReceivedAll(value) }
