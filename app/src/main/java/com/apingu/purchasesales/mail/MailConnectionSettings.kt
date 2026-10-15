@@ -17,10 +17,19 @@ object MailConnectionSettings {
 
     fun isValidMicrosoftClientId(value: String): Boolean = guid.matches(value.trim())
 
+    /**
+     * A shared public client ID is built into the APK for all installations.
+     * Prefer that registration over legacy per-device settings, so an old
+     * override cannot accidentally send friends through another OAuth app.
+     */
     fun microsoftClientId(context: Context): String =
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .getString(KEY_MS_CLIENT_ID, null)?.trim()?.takeIf { it.isNotBlank() }
-            ?: BuildConfig.MICROSOFT_CLIENT_ID.trim()
+        BuildConfig.MICROSOFT_CLIENT_ID.trim()
+            .takeIf(::isValidMicrosoftClientId)
+            ?: context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(KEY_MS_CLIENT_ID, null)?.trim().orEmpty()
+
+    fun hasEmbeddedMicrosoftClientId(): Boolean =
+        isValidMicrosoftClientId(BuildConfig.MICROSOFT_CLIENT_ID)
 
     fun saveMicrosoftClientId(context: Context, value: String) {
         val clientId = value.trim()
