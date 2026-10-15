@@ -16,24 +16,25 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.PurchaseSales">
-        <!-- AppAuth-only result target: explicit pending intents, never exported. -->
+        <!-- Direct Microsoft OAuth return. This activity verifies OAuth state and
+             PKCE before handing an authorization code to the token endpoint. -->
         <activity
             android:name=".mail.MicrosoftOAuthResultActivity"
-            android:exported="false" />
-        <!-- The redirect must match the saved Microsoft Entra URI exactly. -->
-        <activity
-            android:name="net.openid.appauth.RedirectUriReceiverActivity"
             android:exported="true"
-            tools:node="replace">
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data
-                    android:scheme="com.apingu.purchasesales"
+                <data android:scheme="com.apingu.purchasesales"
                     android:host="oauth2redirect" />
             </intent-filter>
         </activity>
+        <!-- Remove AppAuth's built-in management receiver so that Android
+             always delivers this custom scheme to our own callback. -->
+        <activity
+            android:name="net.openid.appauth.RedirectUriReceiverActivity"
+            tools:node="remove" />
         <activity
             android:name=".MainActivity"
             android:exported="true">
