@@ -1,9 +1,6 @@
 package com.apingu.purchasesales.ui
 
-import android.app.Activity
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -48,20 +45,6 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
     var diagnostic by remember { mutableStateOf("") }
     var microsoftClientId by remember {
         mutableStateOf(MailConnectionSettings.microsoftClientId(context))
-    }
-
-    val microsoftResult = rememberLauncherForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            vm.completeMicrosoftConnection(result.data!!)
-        } else if (result.data != null) {
-            // AppAuth may return an OAuth error even when Android's result is OK.
-            vm.completeMicrosoftConnection(result.data!!)
-        } else {
-            diagnostic = "Outlook sign-in was closed without an authorization response."
-            vm.reportMailboxError(diagnostic)
-        }
     }
 
     Scaffold(
@@ -151,8 +134,7 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
                             style = MaterialTheme.typography.bodySmall)
                         Button(
                             onClick = {
-                                runCatching { MailOAuth.microsoftAuthIntent(activity) }
-                                    .onSuccess { microsoftResult.launch(it) }
+                                runCatching { MailOAuth.startMicrosoftAuthorization(activity) }
                                     .onFailure {
                                         diagnostic = it.message ?: "Microsoft sign-in could not start."
                                         vm.reportMailboxError(diagnostic)
