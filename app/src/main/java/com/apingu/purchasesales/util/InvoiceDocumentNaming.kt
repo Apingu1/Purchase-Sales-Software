@@ -14,7 +14,7 @@ object InvoiceDocumentNaming {
     fun baseName(dateEpochDay: Long, supplier: String, dailySequence: Int): String {
         require(dailySequence > 0) { "Purchase sequence must be positive" }
         val safeSupplier = supplier.trim()
-            .replace(Regex("[\\\\/:*?\"<>|\\p{Cntrl}]"), " ")
+            .replace(Regex("[^\\p{L}\\p{N} ._#()-]"), " ")
             .replace(Regex("\\s+"), " ")
             .trim().trimEnd('.')
             .take(90).ifBlank { "Supplier" }

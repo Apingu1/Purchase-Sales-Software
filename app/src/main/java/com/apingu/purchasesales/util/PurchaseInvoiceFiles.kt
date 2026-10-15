@@ -36,6 +36,6 @@ object PurchaseInvoiceFiles {
             }
         }.getOrNull()
         return (fromCursor ?: uri.lastPathSegment ?: "invoice")
-            .substringAfterLast('/').substringAfterLast('\\\\').take(180).ifBlank { "invoice" }
+            .substringAfterLast('/').take(180).ifBlank { "invoice" }
     }
 }
