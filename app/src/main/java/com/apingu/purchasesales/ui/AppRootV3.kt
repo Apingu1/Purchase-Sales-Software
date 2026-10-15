@@ -116,6 +116,11 @@ private fun AppNavigationV3(nav: NavHostController, vm: AppViewModel) {
             composable("expense/{id}") { ExpenseEditor(vm, nav, it.arguments?.getString("id")?.toLongOrNull() ?: 0L) }
             composable("reports") { ReportsScreen(vm, nav) }
             composable("documents") { DocumentsScreen(vm, nav) }
+            composable("invoice-finder") { InvoiceFinderScreen(vm, nav) }
+            composable("invoice-finder/purchase/{id}") {
+                InvoicePurchaseDetailScreen(vm, nav,
+                    it.arguments?.getString("id")?.toLongOrNull() ?: 0L)
+            }
             composable("business") { BusinessScreen(vm, nav) }
         }
     }
@@ -241,6 +246,10 @@ private fun PurchasesScreenV3(vm: AppViewModel, nav: NavHostController) {
     ) { inner ->
         Column(Modifier.padding(inner)) {
             AccountingPeriodSelector(vm, Modifier.padding(horizontal = 12.dp, vertical = 8.dp))
+            OutlinedButton(
+                onClick = { nav.navigate("invoice-finder") },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+            ) { Icon(Icons.Default.FindInPage, null); Text(" Invoice Finder") }
             ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) {
                 Tab(tab == 0, { tab = 0 }, text = { Text("Pending receipts") })
                 Tab(tab == 1, { tab = 1 }, text = { Text("Received") })
@@ -477,6 +486,12 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
             OutlinedButton({ picker.launch("*/*") }, Modifier.fillMaxWidth()) {
                 Icon(Icons.Default.AttachFile, null); Spacer(Modifier.width(6.dp))
                 Text(if (attachment != null) "New invoice selected" else if (!isDuplicate && !order?.invoicePath.isNullOrBlank()) "Replace purchase invoice" else "Attach purchase invoice (optional)")
+            }
+            if (id > 0 && !isDuplicate) {
+                OutlinedButton({ nav.navigate("invoice-finder/purchase/" + id) }, Modifier.fillMaxWidth()) {
+                    Icon(Icons.Default.FolderOpen, null); Spacer(Modifier.width(6.dp))
+                    Text("View / manage multiple invoices")
+                }
             }
 
             Button(
