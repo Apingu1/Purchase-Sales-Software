@@ -27,7 +27,7 @@ Select **Connect Outlook** to open the official Microsoft login portal via Andro
 
 **One-time action by software owner:** Register a Microsoft Entra public client application compatible with Outlook personal and business accounts, with **User.Read** and **Mail.Read** delegated scopes, `offline_access`, and **Mobile and desktop applications → custom redirect URI**:
 
-`com.apingu.purchasesales:/oauth2redirect`
+`com.apingu.purchasesales://oauth2redirect`
 
 For the normal user-facing **Connect Outlook** button to work without entering any settings on each friend's phone, set the GitHub Actions secret `PURCHASE_SALES_MS_CLIENT_ID` to that application's PUBLIC client ID, then create and distribute the signed APK. If the owner has not done this, the app shows an explanatory message and optional **App-owner configuration** section. There are no per-user developer IDs or app keys. The Microsoft sign-in code is present; connection and provider consent have not been live tested with user accounts.
 
