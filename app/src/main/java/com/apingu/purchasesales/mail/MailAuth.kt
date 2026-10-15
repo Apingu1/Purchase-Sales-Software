@@ -99,7 +99,7 @@ object MailOAuth {
     suspend fun completeMicrosoft(context: Context, data: Intent): Pair<String, String> {
         val response = AuthorizationResponse.fromIntent(data)
         val error = AuthorizationException.fromIntent(data)
-        if (response == null) error(error?.errorDescription ?: "Microsoft sign-in did not complete")
+        if (response == null) throw IllegalStateException(error?.errorDescription ?: "Microsoft sign-in did not complete")
         val auth = requireNotNull(response)
         val state = AuthState(auth, error)
         val service = AuthorizationService(context)
@@ -113,7 +113,7 @@ object MailOAuth {
                 }
             }
         } finally { service.dispose() }
-        val profile = MailRest.getJson("https://graph.microsoft.com/v1.0/me?\u0024select=mail,userPrincipalName", token)
+        val profile = MailRest.getJson("https://graph.microsoft.com/v1.0/me?%24select=mail,userPrincipalName", token)
         val address = profile.optString("mail").ifBlank { profile.optString("userPrincipalName") }
             .trim().lowercase()
         require(address.contains("@")) { "Microsoft did not return a usable email identity" }
