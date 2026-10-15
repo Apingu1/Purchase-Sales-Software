@@ -26,6 +26,69 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     val purchaseInvoices = repo.purchaseInvoices.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val pendingInvoiceCandidates = repo.pendingInvoiceCandidates.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val emailAccounts = repo.emailAccounts.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private val _finderProgress = MutableStateFlow("")
+    val finderProgress: StateFlow<String> = _finderProgress
+    private val _finderRunning = MutableStateFlow(false)
+    val finderRunning: StateFlow<Boolean> = _finderRunning
+
+    fun connectGmailToken(token: String) = action("Gmail account connected") {
+        val email = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.apingu.purchasesales.mail.MailOAuth.verifiedGmailAddress(token)
+        }
+        saveConnectedMailbox(email, "GMAIL")
+    }
+
+    fun completeMicrosoftConnection(data: android.content.Intent) = action("Microsoft mailbox connected") {
+        val (address, provider) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            com.apingu.purchasesales.mail.MailOAuth.completeMicrosoft(context, data)
+        }
+        saveConnectedMailbox(address, provider)
+    }
+
+    private suspend fun saveConnectedMailbox(email: String, provider: String) {
+        val existing = dao.getEmailAccount(email)
+        require(existing == null || existing.provider == provider) {
+            "This email is already linked using another provider"
+        }
+        val entry = EmailAccountEntity(
+            id = existing?.id ?: 0,
+            emailAddress = email, provider = provider,
+            displayName = email, isEnabled = true, connectionState = "CONNECTED"
+        )
+        if (existing == null) dao.insertEmailAccount(entry) else dao.updateEmailAccount(entry)
+    }
+
+    fun disconnectMailbox(account: EmailAccountEntity) = action("Email account disconnected") {
+        com.apingu.purchasesales.mail.MailCredentialVault.remove(context, account.emailAddress)
+        dao.updateEmailAccount(account.copy(isEnabled = false, connectionState = "DISCONNECTED"))
+    }
+
+    fun reportMailboxError(error: String) { _message.value = error }
+
+    fun runInvoiceFinder() {
+        if (_finderRunning.value) return
+        viewModelScope.launch {
+            _finderRunning.value = true
+            _finderProgress.value = "Searching eligible connected purchasing mailboxes..."
+            try {
+                val result = com.apingu.purchasesales.mail.InvoiceEmailFinder(
+                    context, (getApplication<Application>() as PurchaseSalesApplication).database
+                ).scan()
+                val summary = "Checked " + result.purchasesChecked + " purchases • " +
+                    result.newCandidates + " new invoice(s) • " + result.skippedPurchases + " skipped"
+                val detail = if (result.errors.isEmpty()) "" else
+                    "\n" + result.errors.take(3).joinToString("\n")
+                _finderProgress.value = summary + detail
+                _message.value = summary
+            } catch (ex: Exception) {
+                _finderProgress.value = ex.message ?: "Invoice scan failed"
+                _message.value = _finderProgress.value
+            } finally {
+                _finderRunning.value = false
+            }
+        }
+    }
+
     val sales = repo.sales.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val saleLines = repo.saleLines.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val allocations = repo.allocations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())

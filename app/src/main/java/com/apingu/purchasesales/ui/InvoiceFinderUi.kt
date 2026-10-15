@@ -43,6 +43,8 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
     val docs by vm.purchaseInvoices.collectAsStateWithLifecycle()
     val suggestions by vm.pendingInvoiceCandidates.collectAsStateWithLifecycle()
     val accounts by vm.emailAccounts.collectAsStateWithLifecycle()
+    val running by vm.finderRunning.collectAsStateWithLifecycle()
+    val progress by vm.finderProgress.collectAsStateWithLifecycle()
     var tab by remember { mutableIntStateOf(0) }
     var query by remember { mutableStateOf("") }
     var target by remember { mutableStateOf<Long?>(null) }
@@ -75,10 +77,17 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
                     Text("Purchase invoice centre", fontWeight = FontWeight.SemiBold)
                     Text(suggestions.size.toString() + " pending  •  " + approved.size + " approved  •  " + missing.size + " missing",
                         style = MaterialTheme.typography.bodySmall)
-                    Button({}, modifier = Modifier.fillMaxWidth(), enabled = false) {
-                        Icon(Icons.Default.FindInPage, null); Text(" Run Invoice Finder")
+                    Button({ vm.runInvoiceFinder() }, modifier = Modifier.fillMaxWidth(),
+                        enabled = !running && accounts.any { it.isEnabled && it.connectionState == "CONNECTED" }) {
+                        Icon(Icons.Default.FindInPage, null)
+                        Text(if (running) " Searching..." else " Run Invoice Finder")
                     }
-                    Text("Email searching is not yet connected. Manual attachments and local previews are available now.",
+                    OutlinedButton({ nav.navigate("email-accounts") }, modifier = Modifier.fillMaxWidth()) {
+                        Icon(Icons.Default.Email, null); Text(" Connected mailboxes")
+                    }
+                    if (progress.isNotBlank()) Text(progress,
+                        style = MaterialTheme.typography.bodySmall)
+                    Text("Search only invoice-less purchases with an order number and their exact connected mailbox. All matches require your approval.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -272,7 +281,7 @@ fun InvoicePurchaseDetailScreen(vm: AppViewModel, nav: NavHostController, orderI
                     }
                 }
             }
-            Text("Additional invoices are stored privately on this device. Multi-invoice Dropbox uploads will follow in a separate phase.",
+            Text("Approved invoices are queued for Dropbox under their purchase date and supplier, using the configured accounting period.",
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }

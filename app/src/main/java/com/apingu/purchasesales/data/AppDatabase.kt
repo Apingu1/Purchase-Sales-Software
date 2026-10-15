@@ -332,6 +332,9 @@ interface AppDao {
     suspend fun getEmailAccounts(): List<EmailAccountEntity>
     @Insert suspend fun insertEmailAccount(value: EmailAccountEntity): Long
     @Update suspend fun updateEmailAccount(value: EmailAccountEntity)
+    @Query("SELECT * FROM email_accounts WHERE lower(emailAddress) = lower(:email) LIMIT 1")
+    suspend fun getEmailAccount(email: String): EmailAccountEntity?
+
 
     @Query("SELECT * FROM invoice_candidates WHERE purchaseOrderId = :orderId ORDER BY foundAtMillis DESC, id DESC")
     fun observeInvoiceCandidates(orderId: Long): Flow<List<InvoiceCandidateEntity>>
@@ -339,6 +342,8 @@ interface AppDao {
     fun observePendingInvoiceCandidates(): Flow<List<InvoiceCandidateEntity>>
     @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertInvoiceCandidate(value: InvoiceCandidateEntity): Long
     @Update suspend fun updateInvoiceCandidate(value: InvoiceCandidateEntity)
+    @Query("SELECT * FROM invoice_candidates WHERE purchaseOrderId = :orderId AND accountEmail = :email AND messageId = :messageId AND attachmentId = :attachmentId LIMIT 1")
+    suspend fun findInvoiceCandidate(orderId: Long, email: String, messageId: String, attachmentId: String): InvoiceCandidateEntity?
     @Query("SELECT * FROM invoice_candidates WHERE id = :id LIMIT 1")
     suspend fun getInvoiceCandidate(id: Long): InvoiceCandidateEntity?
     @Query("DELETE FROM invoice_candidates WHERE purchaseOrderId = :orderId")

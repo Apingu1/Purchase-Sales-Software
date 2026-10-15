@@ -6,6 +6,7 @@ on:
       - main
       - feature/android-v1-complete
       - feature/invoice-finder-ui
+      - feature/invoice-finder-email-dropbox
   pull_request:
     branches:
       - main
