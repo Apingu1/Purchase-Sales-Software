@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feature/android-v1-complete
+      - feature/invoice-finder-ui
   pull_request:
     branches:
       - main

@@ -197,6 +197,7 @@ fun MoreScreen(nav: NavHostController) {
         item { MoreRow(Icons.Default.People, "Customers", "Saved customer cards and invoice codes") { nav.navigate("customers") } }
         item { MoreRow(Icons.Default.Payments, "Expenses", "Expenses and receipt attachments") { nav.navigate("expenses") } }
         item { MoreRow(Icons.Default.Assessment, "Profit & VAT", "Profit, VAT due/refund and selected-period export") { nav.navigate("reports") } }
+        item { MoreRow(Icons.Default.FindInPage, "Invoice Finder", "Pending review, approved and missing purchase invoices") { nav.navigate("invoice-finder") } }
         item { MoreRow(Icons.Default.FolderCopy, "Documents & Dropbox", "Period-segregated invoices, VAT spreadsheet and cloud sync") { nav.navigate("documents") } }
         item { MoreRow(Icons.Default.Business, "Business Details", "Company data, invoice numbering, accounting periods and Dropbox") { nav.navigate("business") } }
     } }
