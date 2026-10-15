@@ -76,7 +76,7 @@ object MailCredentialVault {
 /** Connections use the current native app's signing key/redirect registration. */
 object MailOAuth {
     const val GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
-    const val MS_REDIRECT = "com.apingu.purchasesales:/oauth2redirect"
+    const val MS_REDIRECT = "com.apingu.purchasesales://oauth2redirect"
     private val MS_SCOPES = "User.Read Mail.Read offline_access"
     private val configuration by lazy {
         AuthorizationServiceConfiguration(
@@ -85,17 +85,12 @@ object MailOAuth {
         )
     }
 
-    fun microsoftAuthIntent(activity: Activity): Intent {
-        val clientId = MailConnectionSettings.microsoftClientId(activity)
-        require(MailConnectionSettings.isValidMicrosoftClientId(clientId)) {
-            "Set the Microsoft Entra Application (client) ID under Connected Email Accounts before signing in"
-        }
-        val request = MicrosoftAuthorizationRequest.Builder(
-            configuration, clientId,
-            ResponseTypeValues.CODE, Uri.parse(MS_REDIRECT)
-        ).setScope(MS_SCOPES).setAdditionalParameters(mapOf("prompt" to "select_account")).build()
-        val service = AuthorizationService(activity)
-        return service.getAuthorizationRequestIntent(request).also { service.dispose() }
+    /**
+     * Microsoft browser management is delegated to our own OAuth callback receiver.
+     * AppAuth still handles PKCE request creation, token exchange and refresh.
+     */
+    fun startMicrosoftAuthorization(activity: Activity) {
+        MicrosoftOAuthBrowser.start(activity)
     }
 
     suspend fun completeMicrosoft(context: Context, data: Intent): Pair<String, String> {

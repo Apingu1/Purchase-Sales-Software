@@ -1,0 +1,86 @@
+# Gmail App Password IMAP and Outlook account onboarding
+
+Branch: `feature/gmail-imap-app-password-outlook`, based on `feature/mail-oauth-connection-fix`.
+
+## User-facing connections
+
+### Gmail — no Google Cloud registration required for individual users
+
+1. Sign in at [Google Account 2-Step Verification](https://myaccount.google.com/signinoptions/two-step-verification) and **enable 2-Step Verification (2FA)** for that Gmail account.
+2. Open the official [Google App Passwords](https://myaccount.google.com/apppasswords) page.
+3. Create an App Password labelled **Purchase Sales Software**.
+4. Copy Google's newly generated **16-character App Password**.
+5. In Android open **More → Business Details → Connected Email Accounts → Gmail — App Password**, enter the exact personal Gmail address and the 16-character App Password (spaces between groups are optional), then tap **Connect Gmail**.
+6. The app verifies the password by connecting directly to **imap.gmail.com:993** over TLS with hostname verification, opens a mail folder in **READ_ONLY** mode, and only saves the encrypted password after a successful connection.
+7. Repeat for other accounts. There is no per-account OAuth API key or Google Cloud developer configuration.
+8. For explanations and the exact same official links, tap **?** on the Gmail card.
+
+**Security and limitations:** These are full-mailbox IMAP credentials, not provider-restricted read-only OAuth grants; the Android implementation deliberately reads only and doesn't send, alter, mark-read or delete mail. The password is encrypted on-device by an AES-GCM key in Android Keystore, is not in Room, is excluded from Android cloud/device-transfer backups, and is removed on Disconnect. The user can also revoke the App Password from their Google Account. Google normally revokes existing App Passwords on a primary Google password change. Google disallows App Passwords on some accounts (Advanced Protection, security-key-only, some managed Workspace accounts).
+
+**Gmail-only IMAP:** This adapter currently accepts personal `@gmail.com` addresses to avoid misleading users into expecting unsupported provider configuration. It is not a universal IMAP connector. We do not store normal Gmail passwords.
+
+**Search:** Each eligible invoice-less purchase is matched to its exact connected mailbox and order number. The IMAP search uses server-side BODY / SUBJECT terms in the account's **All Mail** folder when available, otherwise Inbox. It checks up to 50 matching messages per purchase and up to 30 supported attachments (PDF, PNG, JPEG, up to 25 MB each). It creates Pending Review candidates; users must approve before a document joins purchases or syncs to Dropbox. It cannot find an invoice if the order number exists only in the PDF/image and not searchable message text. Scans are triggered manually from Invoice Finder.
+
+## Outlook / Hotmail / Microsoft 365
+
+Select **Connect Outlook** to open the official Microsoft login portal via Android AppAuth OAuth2 with PKCE. Sign in to each mailbox individually and authorise delegated read access. Microsoft OAuth does **not** accept a Gmail App Password or your Microsoft account's normal password in this app.
+
+**One-time action by software owner:** Register a Microsoft Entra public client application compatible with Outlook personal and business accounts, with **User.Read** and **Mail.Read** delegated scopes, `offline_access`, and **Mobile and desktop applications → custom redirect URI**:
+
+`com.apingu.purchasesales://oauth2redirect`
+
+**Connected and confirmed on a user's Android phone (15 October 2026).** The public Microsoft Entra Application (client) ID `4f0b4647-34ae-4597-af86-f58a24678361` is now embedded directly in every APK of this branch. Friends and family can just tap **Connect Outlook** and sign in through Microsoft's browser. The app-owner/client-ID configuration section is hidden when the bundled ID is valid. This is a *public OAuth identifier*, not a client secret; no mailbox-specific developer keys or setup is required. The Android sign-in uses a direct validated browser callback with PKCE, not the older AppAuth browser-management activity.
+
+## Validation checklist
+
+- Connect two different Gmail accounts using separate App Passwords and verify they display as distinct linked mailboxes.
+- Wrong password should never persist, and should not create a connected database entry.
+- Try 16-character password with/without Google-provided whitespace.
+- Run Finder with a purchase for A only; confirm B's mailbox is never accessed and candidate includes A as source mailbox.
+- Confirm PDF and JPEG/PNG pending previews, reject, approve, deduplication and Dropbox naming.
+- Run Finder when Gmail invoice exists outside Inbox but inside All Mail.
+- Confirm Disconnect disables scanning and removes that account's stored App Password; other accounts stay connected.
+- Confirm backup excludes `purchase_sales_imap_secrets.xml` and restored device requires Gmail reauthentication.
+- Microsoft OAuth code return-to-app, token refresh and multiple personal Outlook/Hotmail accounts require live testing.
+- Test real APK installs as *updates*, not uninstall/reinstall, so purchasing data is retained.
+
+
+### Microsoft login troubleshooting
+
+Previous development builds tried AppAuth's built-in browser management and
+Chrome/Custom Tab fallbacks, but could report "User cancelled flow" before
+Microsoft returned an authorization response. Those methods were superseded
+by the working direct OAuth browser callback described below.
+
+If a future account cannot connect, record the Microsoft error code or screenshot
+the in-app result screen without exposing passwords, tokens or authorization URLs.
+Confirm the Microsoft Entra public-client redirect is exactly
+`com.apingu.purchasesales://oauth2redirect` and the Android APK has not been
+uninstalled (updates preserve the device's encrypted credentials).
+
+### Direct OAuth browser callback (October 15, 2026)
+
+Previous versions called AppAuth's `AuthorizationManagementActivity` and received
+`USER_CANCELED_AUTH_FLOW` before Microsoft's final redirect, even after users
+tried both Chrome and Custom Tabs. This was not a reliable indication that the
+user pressed Back. The sign-in code now **bypasses only AppAuth browser
+management**: it builds the official Microsoft authorization request with AppAuth's
+random state and S256 PKCE verifier, saves the short-lived request encrypted in
+Android Keystore, launches the official Microsoft URL in the system browser, and
+receives `com.apingu.purchasesales://oauth2redirect` directly in the Android
+`MicrosoftOAuthResultActivity` intent filter. The app validates the redirect
+host/scheme and compares the returned state with the saved state before passing
+the code to AppAuth for its normal token exchange and refresh. Valid OAuth
+requests are single-use and expire after 30 minutes. Neither password nor
+OAuth code is displayed in diagnostics or persisted as a long-lived credential.
+
+Only a real browser return can establish whether Microsoft sign-in works on a
+particular phone. If it does not, ask the user which Microsoft screen they saw
+immediately before being returned or stuck in the browser and capture any
+Microsoft error code (not authentication URLs, passwords or tokens). A crash
+logcat or Azure sign-in log may help if the phone still force-closes.
+
+
+### What's New popup
+
+The existing one-time **What's New** popup is retained in `ImeiTracking.kt`; it is not replaced with a new screen. A new notice version causes it to appear once when users install this update. The October 15 announcement covers multiple purchase invoices, Pending Review / Approved / Missing Invoice Finder tabs, Gmail App Passwords with 2FA help, Microsoft sign-in without client-ID entry, and Dropbox naming/sync. The October 13 business identifier and credit-note fixes remain listed under previous updates.

@@ -37,12 +37,30 @@ class InvoiceEmailFinder(private val context: Context, private val db: AppDataba
         var found = 0
         var skipped = 0
         val tokens = mutableMapOf<String, String>()
-        orders.forEach { order ->
+        val imapSessions = mutableMapOf<String, GmailImapSession>()
+        var activeImapAccount: String? = null
+        try {
+        // Group by purchasing mailbox, so one IMAP connection is reused for
+        // that mailbox's 20–30 purchases and closed before moving to the next.
+        orders.sortedBy { it.accountUsername.trim().lowercase(java.util.Locale.ROOT) }
+            .forEach { order ->
             val blocker = InvoiceFinderRules.blockReason(order, approved, accounts)
             if (blocker != null) { skipped++; return@forEach }
             val mailbox = accounts.first { it.emailAddress.equals(order.accountUsername.trim(), true) }
             try {
-                val token = tokens[mailbox.emailAddress] ?: when (mailbox.provider) {
+                val imapKey = mailbox.emailAddress.lowercase(java.util.Locale.ROOT)
+                if (activeImapAccount != imapKey) {
+                    imapSessions.values.forEach { runCatching { it.close() } }
+                    imapSessions.clear()
+                    activeImapAccount = imapKey
+                }
+                val imap = if (mailbox.provider == "GMAIL_IMAP") {
+                    imapSessions.getOrPut(imapKey) {
+                        GmailImapSession(mailbox.emailAddress,
+                            GmailImapCredentials.load(context, mailbox.emailAddress))
+                    }
+                } else null
+                val token = if (imap != null) "" else tokens[mailbox.emailAddress] ?: when (mailbox.provider) {
                     "GMAIL" -> {
                         val access = MailOAuth.googleSilentToken(context, mailbox.emailAddress)
                         require(MailOAuth.verifiedGmailAddress(access)
@@ -58,6 +76,7 @@ class InvoiceEmailFinder(private val context: Context, private val db: AppDataba
                 val results = when (mailbox.provider) {
                     "GMAIL" -> gmailCandidates(token, order.orderNumber)
                     "MICROSOFT" -> microsoftCandidates(token, order.orderNumber)
+                    "GMAIL_IMAP" -> requireNotNull(imap).search(order.orderNumber)
                     else -> emptyList()
                 }
                 results.take(30).forEach { match ->
@@ -87,15 +106,20 @@ class InvoiceEmailFinder(private val context: Context, private val db: AppDataba
                     if (id <= 0) return@forEach
                     val before = InvoiceCandidateCache.previewFile(context, id)
                     if (before == null) {
-                        val content = when (mailbox.provider) {
-                            "GMAIL" -> gmailAttachment(token, match)
-                            else -> microsoftAttachment(token, match)
+                        if (imap != null) {
+                            imap.stageAttachment(context, id, match)
+                        } else {
+                            val content = when (mailbox.provider) {
+                                "GMAIL" -> gmailAttachment(token, match)
+                                "MICROSOFT" -> microsoftAttachment(token, match)
+                                else -> error("Unsupported mailbox provider")
+                            }
+                            require(content.isNotEmpty() && content.size <= 25 * 1024 * 1024) {
+                                "Invoice attachment is empty or exceeds 25 MB"
+                            }
+                            InvoiceCandidateCache.stage(context, id, match.mimeType,
+                                ByteArrayInputStream(content))
                         }
-                        require(content.isNotEmpty() && content.size <= 25 * 1024 * 1024) {
-                            "Invoice attachment is empty or exceeds 25 MB"
-                        }
-                        InvoiceCandidateCache.stage(context, id, match.mimeType,
-                            ByteArrayInputStream(content))
                         found++
                     }
                 }
@@ -104,6 +128,9 @@ class InvoiceEmailFinder(private val context: Context, private val db: AppDataba
                 errors += order.supplier.take(36) + " / " + order.orderNumber.take(30) +
                     " (" + mailbox.emailAddress + "): " + (ex.message ?: "search error")
             }
+        }
+        } finally {
+            imapSessions.values.forEach { runCatching { it.close() } }
         }
         InvoiceScanOutcome(searched, found, skipped, errors.take(10))
     }

@@ -31,6 +31,38 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     private val _finderRunning = MutableStateFlow(false)
     val finderRunning: StateFlow<Boolean> = _finderRunning
 
+    private val _connectingImap = MutableStateFlow(false)
+    val connectingImap: StateFlow<Boolean> = _connectingImap
+
+    /** Verify password with Gmail over TLS BEFORE persisting it or marking account connected. */
+    fun connectGmailAppPassword(address: String, inputPassword: String, onSuccess: () -> Unit = {}) {
+        if (_connectingImap.value) return
+        viewModelScope.launch {
+            _connectingImap.value = true
+            val email = address.trim().lowercase(java.util.Locale.ROOT)
+            try {
+                val password = com.apingu.purchasesales.mail.GmailImapCredentials
+                    .requireAppPassword(inputPassword)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    com.apingu.purchasesales.mail.GmailImapSession(email, password).use { }
+                    com.apingu.purchasesales.mail.GmailImapCredentials.save(context, email, password)
+                }
+                try {
+                    saveConnectedMailbox(email, "GMAIL_IMAP")
+                } catch (ex: Exception) {
+                    com.apingu.purchasesales.mail.GmailImapCredentials.remove(context, email)
+                    throw ex
+                }
+                _message.value = "Gmail connected: " + email
+                onSuccess()
+            } catch (ex: Exception) {
+                _message.value = ex.message ?: "Unable to connect to Gmail IMAP"
+            } finally {
+                _connectingImap.value = false
+            }
+        }
+    }
+
     fun connectGmailToken(token: String, expectedAddress: String = "") = action("Gmail account connected") {
         val email = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
             com.apingu.purchasesales.mail.MailOAuth.verifiedGmailAddress(token)
@@ -50,7 +82,8 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
 
     private suspend fun saveConnectedMailbox(email: String, provider: String) {
         val existing = dao.getEmailAccount(email)
-        require(existing == null || existing.provider == provider) {
+        require(existing == null || existing.provider == provider ||
+            setOf(existing.provider, provider) == setOf("GMAIL", "GMAIL_IMAP")) {
             "This email is already linked using another provider"
         }
         val entry = EmailAccountEntity(
@@ -62,7 +95,11 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     }
 
     fun disconnectMailbox(account: EmailAccountEntity) = action("Email account disconnected") {
-        com.apingu.purchasesales.mail.MailCredentialVault.remove(context, account.emailAddress)
+        if (account.provider == "GMAIL_IMAP") {
+            com.apingu.purchasesales.mail.GmailImapCredentials.remove(context, account.emailAddress)
+        } else {
+            com.apingu.purchasesales.mail.MailCredentialVault.remove(context, account.emailAddress)
+        }
         dao.updateEmailAccount(account.copy(isEnabled = false, connectionState = "DISCONNECTED"))
     }
 

@@ -7,6 +7,9 @@ plugins {
 
 val ciVersionCode = System.getenv("GITHUB_RUN_NUMBER")?.toIntOrNull()
 val ciKeystorePath = System.getenv("PURCHASE_SALES_KEYSTORE_PATH")
+// Microsoft Entra Application (client) ID is a PUBLIC OAuth identifier, not a secret.
+// Embed a working default in every APK so friends can simply tap Connect Outlook.
+val microsoftPublicClientId = "4f0b4647-34ae-4597-af86-f58a24678361"
 
 android {
     namespace = "com.apingu.purchasesales"
@@ -16,7 +19,7 @@ android {
 
     defaultConfig {
         applicationId = "com.apingu.purchasesales"
-        buildConfigField("String", "MICROSOFT_CLIENT_ID", "\"${System.getenv("PURCHASE_SALES_MS_CLIENT_ID") ?: ""}\"")
+        buildConfigField("String", "MICROSOFT_CLIENT_ID", "\"$microsoftPublicClientId\"")
         manifestPlaceholders["appAuthRedirectScheme"] = "com.apingu.purchasesales"
         minSdk = 28
         targetSdk = 35
@@ -59,6 +62,10 @@ android {
     kotlinOptions { jvmTarget = "17" }
     buildFeatures { compose = true }
     packaging.resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+    packaging.resources.excludes += setOf(
+        "/META-INF/NOTICE.md", "/META-INF/LICENSE.md",
+        "/META-INF/NOTICE.txt", "/META-INF/LICENSE.txt"
+    )
 }
 
 dependencies {
@@ -83,6 +90,8 @@ dependencies {
 
     implementation("androidx.work:work-runtime-ktx:2.10.0")
     implementation("net.openid:appauth:0.11.1")
+    implementation("com.sun.mail:android-mail:1.6.7")
+    implementation("com.sun.mail:android-activation:1.6.7")
     implementation("com.google.android.gms:play-services-auth:21.3.0")
     implementation("androidx.documentfile:documentfile:1.0.1")
 
