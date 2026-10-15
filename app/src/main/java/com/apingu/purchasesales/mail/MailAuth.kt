@@ -93,7 +93,7 @@ object MailOAuth {
      * AppAuth returns a filled-in PendingIntent with the OAuth response, even after recreation.
      */
     @Synchronized
-    fun startMicrosoftAuthorization(activity: Activity) {
+    fun startMicrosoftAuthorization(activity: Activity, useExternalBrowser: Boolean = true) {
         val clientId = MailConnectionSettings.microsoftClientId(activity)
         require(MailConnectionSettings.isValidMicrosoftClientId(clientId)) {
             "The app owner must configure the Microsoft Entra public client ID before signing in"
@@ -121,7 +121,20 @@ object MailOAuth {
             }, flags
         )
         activeMicrosoftService?.dispose()
-        val service = AuthorizationService(activity)
+        // A full system-browser activity does not share the fragile Custom Tab
+        // task stack on some devices / account-chooser and authenticator handoffs.
+        // Keep AppAuth PKCE, redirect verification and token exchange unchanged.
+        // A Custom Tab remains available as an explicit fallback in the UI.
+        val configuration = if (useExternalBrowser) {
+            net.openid.appauth.AppAuthConfiguration.Builder()
+                .setBrowserMatcher(net.openid.appauth.browser.BrowserMatcher { browser ->
+                    !browser.useCustomTab
+                })
+                .build()
+        } else {
+            net.openid.appauth.AppAuthConfiguration.DEFAULT
+        }
+        val service = AuthorizationService(activity, configuration)
         activeMicrosoftService = service
         try {
             service.performAuthorizationRequest(request, success, cancelled)
