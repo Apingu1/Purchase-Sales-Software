@@ -129,6 +129,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     val customers = dao.observeCustomers()
     val purchaseOrders = dao.observePurchaseOrders()
     val purchases = dao.observePurchases()
+    val emailAccounts = dao.observeEmailAccounts()
+    val pendingInvoiceCandidates = dao.observePendingInvoiceCandidates()
     val sales = dao.observeSales()
     val saleLines = dao.observeSaleLines()
     val allocations = dao.observeSaleAllocations()
@@ -246,13 +248,28 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val copiedInvoice = attachmentUri?.let {
             DocumentStore.copyIntoApp(context, it, "PUR_ORDER_${draft.id.takeIf { n -> n > 0 } ?: "NEW"}")
         }
+        val attachmentName = attachmentUri?.let { PurchaseInvoiceFiles.originalName(context, it) }.orEmpty()
+        val attachmentFingerprint = try {
+            copiedInvoice?.let(PurchaseInvoiceFiles::fingerprint)
+        } catch (error: Exception) {
+            copiedInvoice?.let { File(it).delete() }
+            throw error
+        }
 
-        val orderId = db.withTransaction {
+        val orderId = try {
+            db.withTransaction {
             val existingOrder = if (draft.id > 0) dao.getPurchaseOrder(draft.id) else null
             if (draft.id > 0) requireNotNull(existingOrder) { "Purchase order not found" }
 
             val invoicePath = copiedInvoice ?: draft.existingInvoicePath ?: existingOrder?.invoicePath
             val now = System.currentTimeMillis()
+            val supplierKey = InvoiceDocumentNaming.supplierKey(draft.supplier)
+            val sequence = if (existingOrder != null &&
+                existingOrder.purchaseDateEpochDay == draft.dateEpochDay &&
+                existingOrder.invoiceSupplierKey == supplierKey &&
+                existingOrder.invoiceSequence > 0
+            ) existingOrder.invoiceSequence
+              else dao.nextPurchaseInvoiceSequence(draft.dateEpochDay, supplierKey, draft.id)
             val header = PurchaseOrderEntity(
                 id = draft.id,
                 purchaseDateEpochDay = draft.dateEpochDay,
@@ -263,11 +280,36 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 paymentMethod = draft.paymentMethod.trim(),
                 invoicePath = invoicePath,
                 notes = draft.notes.trim(),
-                updatedAtMillis = now
+                updatedAtMillis = now,
+                invoiceSequence = sequence,
+                invoiceSupplierKey = supplierKey
             )
             val savedOrderId = if (existingOrder == null) dao.insertPurchaseOrder(header) else {
                 dao.updatePurchaseOrder(header)
                 header.id
+            }
+
+            if (copiedInvoice != null) {
+                // Old purchase-editor's "Replace invoice" updates only its legacy slot.
+                // Documents added through the new multi-invoice repository are preserved.
+                val previous = existingOrder?.invoicePath?.let { oldPath ->
+                    dao.getPurchaseInvoiceByPath(savedOrderId, oldPath)
+                }
+                val fingerprint = requireNotNull(attachmentFingerprint)
+                val replacement = PurchaseInvoiceEntity(
+                    id = previous?.id ?: 0,
+                    purchaseOrderId = savedOrderId,
+                    invoiceOrdinal = previous?.invoiceOrdinal ?: dao.nextInvoiceOrdinal(savedOrderId),
+                    filePath = copiedInvoice,
+                    originalFileName = attachmentName,
+                    source = "MANUAL",
+                    sha256 = fingerprint.sha256,
+                    byteSize = fingerprint.byteSize,
+                    createdAtMillis = previous?.createdAtMillis ?: now,
+                    approvedAtMillis = now
+                )
+                if (previous == null) dao.insertPurchaseInvoice(replacement)
+                else dao.updatePurchaseInvoice(replacement)
             }
 
             val existingLines = if (existingOrder == null) emptyList() else dao.getPurchasesForOrder(savedOrderId)
@@ -340,9 +382,89 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 dao.updateAllocationUnitCostForPurchase(lineId, unitNet)
             }
             savedOrderId
+            }
+        } catch (error: Exception) {
+            // An invalid purchase must not leave an unattached copy on disk.
+            copiedInvoice?.let { File(it).delete() }
+            throw error
         }
         enqueueSync()
         return orderId
+    }
+
+
+    /** Attach an additional invoice without overwriting other invoices or any purchase financials. */
+    suspend fun attachAdditionalPurchaseInvoice(orderId: Long, uri: Uri): Long {
+        requireNotNull(dao.getPurchaseOrder(orderId)) { "Purchase order not found" }
+        val path = DocumentStore.copyIntoApp(context, uri, "PUR_INV_${orderId}_${java.util.UUID.randomUUID()}")
+        try {
+            val fingerprint = PurchaseInvoiceFiles.fingerprint(path)
+            val fileName = PurchaseInvoiceFiles.originalName(context, uri)
+            val id = db.withTransaction {
+                requireNotNull(dao.getPurchaseOrder(orderId)) { "Purchase order not found" }
+                val existing = dao.getPurchaseInvoices(orderId)
+                require(existing.none { previous ->
+                    val priorHash = previous.sha256.ifBlank {
+                        runCatching { PurchaseInvoiceFiles.fingerprint(previous.filePath).sha256 }.getOrDefault("")
+                    }
+                    priorHash.isNotBlank() && priorHash == fingerprint.sha256
+                }) {
+                    "This invoice is already attached to the purchase"
+                }
+                dao.insertPurchaseInvoice(PurchaseInvoiceEntity(
+                    purchaseOrderId = orderId,
+                    invoiceOrdinal = dao.nextInvoiceOrdinal(orderId),
+                    filePath = path,
+                    originalFileName = fileName,
+                    source = "MANUAL",
+                    sha256 = fingerprint.sha256,
+                    byteSize = fingerprint.byteSize
+                ))
+            }
+            enqueueSync()
+            return id
+        } catch (error: Exception) {
+            File(path).delete()
+            throw error
+        }
+    }
+
+    suspend fun getPurchaseInvoiceDocuments(orderId: Long): List<PurchaseInvoiceEntity> =
+        dao.getPurchaseInvoices(orderId)
+
+    /**
+     * Removes exactly one document. Never delete a shared local file while another
+     * invoice document (or legacy purchase line) still references it.
+     */
+    suspend fun removePurchaseInvoiceDocument(invoiceId: Long) {
+        val invoice = dao.getPurchaseInvoice(invoiceId) ?: error("Invoice not found")
+        val order = dao.getPurchaseOrder(invoice.purchaseOrderId) ?: error("Purchase order not found")
+        val affectedLegacyLines = dao.getPurchasesForOrder(order.id)
+            .filter { it.invoicePath == invoice.filePath }
+        val legacySlot = order.invoicePath == invoice.filePath || affectedLegacyLines.isNotEmpty()
+        db.withTransaction {
+            dao.deletePurchaseInvoice(invoice)
+            if (legacySlot) {
+                dao.updatePurchaseOrder(order.copy(invoicePath = null, updatedAtMillis = System.currentTimeMillis()))
+                affectedLegacyLines.forEach { line ->
+                    dao.updatePurchase(line.copy(invoicePath = null, updatedAtMillis = System.currentTimeMillis()))
+                }
+            }
+        }
+        if (legacySlot) {
+            val remoteLines = affectedLegacyLines.ifEmpty { dao.getPurchasesForOrder(order.id).take(1) }
+            remoteLines.forEach { line ->
+                val file = File(invoice.filePath)
+                val safeItem = line.item.replace(Regex("[^A-Za-z0-9._-]+"), "_").take(48)
+                DropboxDeletionQueue.enqueuePurchase(context, line.purchaseDateEpochDay,
+                    "PUR_${line.id}_${safeItem}.${file.extension.ifBlank { "bin" }}")
+            }
+        }
+        val inOtherInvoices = dao.getAllPurchaseInvoices().any { it.filePath == invoice.filePath }
+        val inLegacyOrders = dao.getPurchaseOrders().any { it.invoicePath == invoice.filePath }
+        val inLegacyLines = dao.getPurchases().any { it.invoicePath == invoice.filePath }
+        if (!inOtherInvoices && !inLegacyOrders && !inLegacyLines) File(invoice.filePath).delete()
+        enqueueSync()
     }
 
     private fun legacyRefundNet(refundGrossPence: Long, vatType: String): Long = if (refundGrossPence > 0) breakdownFromGross(refundGrossPence, vatType).netPence else 0
@@ -430,6 +552,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     suspend fun deletePurchaseOrder(orderId: Long) {
         val order = dao.getPurchaseOrder(orderId) ?: error("Purchase order not found")
         val lines = dao.getPurchasesForOrder(orderId)
+        val linkedInvoiceFiles = dao.getPurchaseInvoices(orderId).map { it.filePath }
         require(lines.isNotEmpty()) { "Purchase order has no item lines" }
         val allocations = dao.getSaleAllocations()
         val allocated = lines.firstOrNull { line -> allocations.any { it.purchaseId == line.id } }
@@ -459,7 +582,12 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             lines.forEach { dao.deletePurchase(it) }
             dao.deletePurchaseOrder(order)
         }
-        (lines.mapNotNull { it.invoicePath } + listOfNotNull(order.invoicePath)).distinct().forEach { File(it).delete() }
+        val otherDocuments = dao.getAllPurchaseInvoices().map { it.filePath }.toSet()
+        val otherOrderPaths = dao.getPurchaseOrders().mapNotNull { it.invoicePath }.toSet()
+        val otherLinePaths = dao.getPurchases().mapNotNull { it.invoicePath }.toSet()
+        (lines.mapNotNull { it.invoicePath } + listOfNotNull(order.invoicePath) + linkedInvoiceFiles)
+            .distinct().filterNot { it in otherDocuments || it in otherOrderPaths || it in otherLinePaths }
+            .forEach { File(it).delete() }
         enqueueSync()
     }
 

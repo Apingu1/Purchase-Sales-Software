@@ -8,6 +8,7 @@ on:
   pull_request:
     branches:
       - main
+      - feature/android-v1-complete
   workflow_dispatch:
 
 permissions:
@@ -71,9 +72,9 @@ jobs:
           echo "PURCHASE_SALES_KEY_ALIAS=purchasesales" >> "$GITHUB_ENV"
           echo "PURCHASE_SALES_KEY_PASSWORD=purchasesales-ci" >> "$GITHUB_ENV"
 
-      - name: Build debug APK
+      - name: Run JVM unit tests and build debug APK
         if: steps.project.outputs.present == 'true'
-        run: gradle --no-daemon :app:assembleDebug
+        run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
 
       - name: Verify persistent APK signature
         if: steps.project.outputs.present == 'true'

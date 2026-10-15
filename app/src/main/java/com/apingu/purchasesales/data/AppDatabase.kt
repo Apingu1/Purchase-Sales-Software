@@ -51,7 +51,7 @@ data class CustomerEntity(
     val notes: String = ""
 )
 
-@Entity(tableName = "purchase_orders")
+@Entity(tableName = "purchase_orders", indices = [Index(value = ["purchaseDateEpochDay", "invoiceSupplierKey", "invoiceSequence"], unique = true)])
 data class PurchaseOrderEntity(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val purchaseDateEpochDay: Long,
@@ -62,7 +62,82 @@ data class PurchaseOrderEntity(
     val paymentMethod: String = "",
     val invoicePath: String? = null,
     val notes: String = "",
-    val updatedAtMillis: Long = System.currentTimeMillis()
+    val updatedAtMillis: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "0") val invoiceSequence: Int = 0,
+    @ColumnInfo(defaultValue = "''") val invoiceSupplierKey: String = ""
+)
+
+
+/**
+ * Stable per-day, per-supplier sequence is kept on PurchaseOrderEntity.
+ * Approved invoices are separate order-level documents; never duplicate documents per item line.
+ */
+@Entity(
+    tableName = "purchase_invoices",
+    foreignKeys = [ForeignKey(
+        entity = PurchaseOrderEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["purchaseOrderId"],
+        onDelete = ForeignKey.CASCADE
+    )],
+    indices = [
+        Index("purchaseOrderId"),
+        Index(value = ["purchaseOrderId", "invoiceOrdinal"], unique = true)
+    ]
+)
+data class PurchaseInvoiceEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val purchaseOrderId: Long,
+    val invoiceOrdinal: Int,
+    val filePath: String,
+    val originalFileName: String = "",
+    val source: String = "MANUAL",
+    val sourceAccountEmail: String = "",
+    val sourceMessageId: String? = null,
+    val sourceAttachmentId: String? = null,
+    val sha256: String = "",
+    val byteSize: Long = 0,
+    val approvedAtMillis: Long = System.currentTimeMillis(),
+    val createdAtMillis: Long = System.currentTimeMillis()
+)
+
+/** Metadata only: OAuth credentials are not stored in this unencrypted Room table. */
+@Entity(tableName = "email_accounts", indices = [Index(value = ["emailAddress"], unique = true)])
+data class EmailAccountEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val emailAddress: String,
+    val provider: String,
+    val displayName: String = "",
+    val isEnabled: Boolean = true,
+    val connectionState: String = "NOT_CONNECTED",
+    val lastCheckedAtMillis: Long = 0
+)
+
+/** Mailbox candidates are NOT approved documents and do not carry permanent file paths. */
+@Entity(
+    tableName = "invoice_candidates",
+    foreignKeys = [ForeignKey(
+        entity = PurchaseOrderEntity::class,
+        parentColumns = ["id"],
+        childColumns = ["purchaseOrderId"],
+        onDelete = ForeignKey.CASCADE
+    )],
+    indices = [
+        Index("purchaseOrderId"),
+        Index(value = ["purchaseOrderId", "accountEmail", "messageId", "attachmentId"], unique = true)
+    ]
+)
+data class InvoiceCandidateEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val purchaseOrderId: Long,
+    val accountEmail: String,
+    val messageId: String,
+    val attachmentId: String,
+    val originalFileName: String,
+    val mimeType: String = "application/pdf",
+    val status: String = "PENDING_REVIEW",
+    val foundAtMillis: Long = System.currentTimeMillis(),
+    val reviewedAtMillis: Long = 0
 )
 
 @Entity(tableName = "purchases", indices = [Index("purchaseOrderId")])
@@ -230,6 +305,41 @@ interface AppDao {
     @Update suspend fun updatePurchaseOrder(value: PurchaseOrderEntity)
     @Delete suspend fun deletePurchaseOrder(value: PurchaseOrderEntity)
 
+    @Query("SELECT COALESCE(MAX(invoiceSequence), 0) + 1 FROM purchase_orders WHERE purchaseDateEpochDay = :dateEpochDay AND invoiceSupplierKey = :supplierKey AND id != :excludeId")
+    suspend fun nextPurchaseInvoiceSequence(dateEpochDay: Long, supplierKey: String, excludeId: Long = 0): Int
+
+    @Query("SELECT * FROM purchase_invoices WHERE purchaseOrderId = :orderId ORDER BY invoiceOrdinal, id")
+    fun observePurchaseInvoices(orderId: Long): Flow<List<PurchaseInvoiceEntity>>
+    @Query("SELECT * FROM purchase_invoices ORDER BY purchaseOrderId, invoiceOrdinal, id")
+    suspend fun getAllPurchaseInvoices(): List<PurchaseInvoiceEntity>
+    @Query("SELECT * FROM purchase_invoices WHERE purchaseOrderId = :orderId ORDER BY invoiceOrdinal, id")
+    suspend fun getPurchaseInvoices(orderId: Long): List<PurchaseInvoiceEntity>
+    @Query("SELECT * FROM purchase_invoices WHERE id = :id")
+    suspend fun getPurchaseInvoice(id: Long): PurchaseInvoiceEntity?
+    @Query("SELECT * FROM purchase_invoices WHERE purchaseOrderId = :orderId AND filePath = :filePath LIMIT 1")
+    suspend fun getPurchaseInvoiceByPath(orderId: Long, filePath: String): PurchaseInvoiceEntity?
+    @Query("SELECT COALESCE(MAX(invoiceOrdinal), 0) + 1 FROM purchase_invoices WHERE purchaseOrderId = :orderId")
+    suspend fun nextInvoiceOrdinal(orderId: Long): Int
+    @Insert suspend fun insertPurchaseInvoice(value: PurchaseInvoiceEntity): Long
+    @Update suspend fun updatePurchaseInvoice(value: PurchaseInvoiceEntity)
+    @Delete suspend fun deletePurchaseInvoice(value: PurchaseInvoiceEntity)
+
+    @Query("SELECT * FROM email_accounts ORDER BY emailAddress COLLATE NOCASE")
+    fun observeEmailAccounts(): Flow<List<EmailAccountEntity>>
+    @Query("SELECT * FROM email_accounts ORDER BY emailAddress COLLATE NOCASE")
+    suspend fun getEmailAccounts(): List<EmailAccountEntity>
+    @Insert suspend fun insertEmailAccount(value: EmailAccountEntity): Long
+    @Update suspend fun updateEmailAccount(value: EmailAccountEntity)
+
+    @Query("SELECT * FROM invoice_candidates WHERE purchaseOrderId = :orderId ORDER BY foundAtMillis DESC, id DESC")
+    fun observeInvoiceCandidates(orderId: Long): Flow<List<InvoiceCandidateEntity>>
+    @Query("SELECT * FROM invoice_candidates WHERE status = 'PENDING_REVIEW' ORDER BY foundAtMillis DESC, id DESC")
+    fun observePendingInvoiceCandidates(): Flow<List<InvoiceCandidateEntity>>
+    @Insert(onConflict = OnConflictStrategy.IGNORE) suspend fun insertInvoiceCandidate(value: InvoiceCandidateEntity): Long
+    @Update suspend fun updateInvoiceCandidate(value: InvoiceCandidateEntity)
+    @Query("DELETE FROM invoice_candidates WHERE purchaseOrderId = :orderId")
+    suspend fun clearInvoiceCandidates(orderId: Long)
+
     @Query("SELECT * FROM purchases ORDER BY purchaseDateEpochDay DESC, id DESC") fun observePurchases(): Flow<List<PurchaseEntity>>
     @Query("SELECT * FROM purchases ORDER BY purchaseDateEpochDay ASC, id ASC") suspend fun getPurchases(): List<PurchaseEntity>
     @Query("SELECT * FROM purchases WHERE id = :id") suspend fun getPurchase(id: Long): PurchaseEntity?
@@ -296,9 +406,10 @@ interface AppDao {
         BusinessEntity::class, AccountingPeriodEntity::class, CustomerEntity::class,
         PurchaseOrderEntity::class, PurchaseEntity::class, SaleEntity::class, SaleLineEntity::class,
         SaleAllocationEntity::class, CreditNoteEntity::class, SaleReturnEntity::class, SaleReturnAllocationEntity::class,
-        CreditNoteImeiEntity::class, ExpenseEntity::class
+        CreditNoteImeiEntity::class, ExpenseEntity::class,
+        PurchaseInvoiceEntity::class, EmailAccountEntity::class, InvoiceCandidateEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -409,10 +520,101 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+
+        private val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `purchase_orders` ADD COLUMN `invoiceSequence` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `purchase_orders` ADD COLUMN `invoiceSupplierKey` TEXT NOT NULL DEFAULT ''")
+                db.execSQL("UPDATE purchase_orders SET invoiceSupplierKey = lower(trim(supplier))")
+                // Correlated count works on Android's bundled SQLite (no window-function dependency).
+                db.execSQL("""
+                    UPDATE purchase_orders SET invoiceSequence = (
+                        SELECT COUNT(*) FROM purchase_orders AS earlier
+                        WHERE earlier.purchaseDateEpochDay = purchase_orders.purchaseDateEpochDay
+                          AND earlier.invoiceSupplierKey = purchase_orders.invoiceSupplierKey
+                          AND earlier.id <= purchase_orders.id
+                    )
+                """.trimIndent())
+
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_purchase_orders_purchaseDateEpochDay_invoiceSupplierKey_invoiceSequence` ON `purchase_orders` (`purchaseDateEpochDay`, `invoiceSupplierKey`, `invoiceSequence`)")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `purchase_invoices` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `purchaseOrderId` INTEGER NOT NULL,
+                        `invoiceOrdinal` INTEGER NOT NULL,
+                        `filePath` TEXT NOT NULL,
+                        `originalFileName` TEXT NOT NULL,
+                        `source` TEXT NOT NULL,
+                        `sourceAccountEmail` TEXT NOT NULL,
+                        `sourceMessageId` TEXT,
+                        `sourceAttachmentId` TEXT,
+                        `sha256` TEXT NOT NULL,
+                        `byteSize` INTEGER NOT NULL,
+                        `approvedAtMillis` INTEGER NOT NULL,
+                        `createdAtMillis` INTEGER NOT NULL,
+                        FOREIGN KEY(`purchaseOrderId`) REFERENCES `purchase_orders`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_purchase_invoices_purchaseOrderId` ON `purchase_invoices` (`purchaseOrderId`)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_purchase_invoices_purchaseOrderId_invoiceOrdinal` ON `purchase_invoices` (`purchaseOrderId`, `invoiceOrdinal`)")
+                // Backfill without moving or deleting the old local files; purchase header is authoritative.
+                // Fallback to the first line for older databases that only held the path there.
+                db.execSQL("""
+                    INSERT INTO purchase_invoices
+                        (purchaseOrderId, invoiceOrdinal, filePath, originalFileName, source,
+                         sourceAccountEmail, sourceMessageId, sourceAttachmentId, sha256, byteSize,
+                         approvedAtMillis, createdAtMillis)
+                    SELECT po.id, 1,
+                        CASE WHEN length(trim(coalesce(po.invoicePath, ''))) > 0 THEN po.invoicePath
+                             ELSE (SELECT p.invoicePath FROM purchases p
+                                   WHERE p.purchaseOrderId = po.id AND length(trim(coalesce(p.invoicePath, ''))) > 0
+                                   ORDER BY p.id LIMIT 1) END,
+                        '', 'LEGACY', '', NULL, NULL, '', 0,
+                        po.updatedAtMillis, po.updatedAtMillis
+                    FROM purchase_orders po
+                    WHERE length(trim(coalesce(po.invoicePath, ''))) > 0 OR EXISTS (
+                        SELECT 1 FROM purchases p WHERE p.purchaseOrderId = po.id
+                          AND length(trim(coalesce(p.invoicePath, ''))) > 0
+                    )
+                """.trimIndent())
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `email_accounts` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `emailAddress` TEXT NOT NULL,
+                        `provider` TEXT NOT NULL,
+                        `displayName` TEXT NOT NULL,
+                        `isEnabled` INTEGER NOT NULL,
+                        `connectionState` TEXT NOT NULL,
+                        `lastCheckedAtMillis` INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_email_accounts_emailAddress` ON `email_accounts` (`emailAddress`)")
+
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS `invoice_candidates` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `purchaseOrderId` INTEGER NOT NULL,
+                        `accountEmail` TEXT NOT NULL,
+                        `messageId` TEXT NOT NULL,
+                        `attachmentId` TEXT NOT NULL,
+                        `originalFileName` TEXT NOT NULL,
+                        `mimeType` TEXT NOT NULL,
+                        `status` TEXT NOT NULL,
+                        `foundAtMillis` INTEGER NOT NULL,
+                        `reviewedAtMillis` INTEGER NOT NULL,
+                        FOREIGN KEY(`purchaseOrderId`) REFERENCES `purchase_orders`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_invoice_candidates_purchaseOrderId` ON `invoice_candidates` (`purchaseOrderId`)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_invoice_candidates_purchaseOrderId_accountEmail_messageId_attachmentId` ON `invoice_candidates` (`purchaseOrderId`, `accountEmail`, `messageId`, `attachmentId`)")
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder(
             context.applicationContext,
             AppDatabase::class.java,
             "purchase-sales.db"
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6).fallbackToDestructiveMigration().build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7).build()
     }
 }
