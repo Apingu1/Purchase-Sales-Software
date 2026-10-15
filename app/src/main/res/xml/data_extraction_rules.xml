@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="purchase_sales_imap_secrets.xml" />
+        <exclude domain="sharedpref" path="mail_oauth_state.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="purchase_sales_imap_secrets.xml" />
+        <exclude domain="sharedpref" path="mail_oauth_state.xml" />
+    </device-transfer>
+</data-extraction-rules>
