@@ -139,7 +139,8 @@ private fun gmailCandidates(token: String, orderNumber: String): List<MailAttach
             val mime = supported(name, part.optString("mimeType"))
             val body = part.optJSONObject("body")
             val attachmentId = body?.optString("attachmentId").orEmpty()
-            if (mime != null && name.isNotBlank()) {
+            if (mime != null && name.isNotBlank() &&
+                (body?.optLong("size", 0) ?: 0L) <= 25L * 1024 * 1024) {
                 // Gmail may embed a MIME body without a standalone attachmentId.
                 results += MailAttachmentMatch(mid, attachmentId.ifBlank { "inline:" + part.optString("partId") },
                     name, mime)

@@ -91,7 +91,7 @@ object MailOAuth {
         val request = MicrosoftAuthorizationRequest.Builder(
             configuration, BuildConfig.MICROSOFT_CLIENT_ID,
             ResponseTypeValues.CODE, Uri.parse(MS_REDIRECT)
-        ).setScope(MS_SCOPES).build()
+        ).setScope(MS_SCOPES).setAdditionalParameters(mapOf("prompt" to "select_account")).build()
         val service = AuthorizationService(activity)
         return service.getAuthorizationRequestIntent(request).also { service.dispose() }
     }
