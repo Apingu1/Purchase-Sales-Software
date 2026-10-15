@@ -249,6 +249,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val copiedInvoice = attachmentUri?.let {
             DocumentStore.copyIntoApp(context, it, "PUR_ORDER_${draft.id.takeIf { n -> n > 0 } ?: "NEW"}")
         }
+        val oldDropboxOrder = if (draft.id > 0) dao.getPurchaseOrder(draft.id) else null
+        val oldDropboxDocuments = if (draft.id > 0) dao.getPurchaseInvoices(draft.id) else emptyList()
         val attachmentName = attachmentUri?.let { PurchaseInvoiceFiles.originalName(context, it) }.orEmpty()
         val attachmentFingerprint = try {
             copiedInvoice?.let(PurchaseInvoiceFiles::fingerprint)
@@ -389,6 +391,19 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             copiedInvoice?.let { File(it).delete() }
             throw error
         }
+        if (oldDropboxOrder != null) {
+            val old = oldDropboxOrder
+            val now = dao.getPurchaseOrder(orderId)
+            if (now != null && (old.purchaseDateEpochDay != now.purchaseDateEpochDay ||
+                old.supplier != now.supplier || old.invoiceSequence != now.invoiceSequence)) {
+                oldDropboxDocuments.forEach { doc ->
+                    DropboxDeletionQueue.enqueuePurchase(context, old.purchaseDateEpochDay,
+                        InvoiceDocumentNaming.invoiceFileName(old.purchaseDateEpochDay, old.supplier,
+                            old.invoiceSequence.takeIf { it > 0 } ?: old.id.toInt(),
+                            doc.invoiceOrdinal, File(doc.filePath).extension.ifBlank { "pdf" }))
+                }
+            }
+        }
         enqueueSync()
         return orderId
     }
@@ -516,6 +531,10 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val affectedLegacyLines = dao.getPurchasesForOrder(order.id)
             .filter { it.invoicePath == invoice.filePath }
         val legacySlot = order.invoicePath == invoice.filePath || affectedLegacyLines.isNotEmpty()
+        DropboxDeletionQueue.enqueuePurchase(context, order.purchaseDateEpochDay,
+            InvoiceDocumentNaming.invoiceFileName(order.purchaseDateEpochDay, order.supplier,
+                order.invoiceSequence.takeIf { it > 0 } ?: order.id.toInt(),
+                invoice.invoiceOrdinal, File(invoice.filePath).extension.ifBlank { "pdf" }))
         db.withTransaction {
             dao.deletePurchaseInvoice(invoice)
             if (legacySlot) {
@@ -626,6 +645,12 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     suspend fun deletePurchaseOrder(orderId: Long) {
         val order = dao.getPurchaseOrder(orderId) ?: error("Purchase order not found")
         val lines = dao.getPurchasesForOrder(orderId)
+        dao.getPurchaseInvoices(orderId).forEach { doc ->
+            DropboxDeletionQueue.enqueuePurchase(context, order.purchaseDateEpochDay,
+                InvoiceDocumentNaming.invoiceFileName(order.purchaseDateEpochDay, order.supplier,
+                    order.invoiceSequence.takeIf { it > 0 } ?: order.id.toInt(),
+                    doc.invoiceOrdinal, File(doc.filePath).extension.ifBlank { "pdf" }))
+        }
         val linkedInvoiceFiles = dao.getPurchaseInvoices(orderId).map { it.filePath }
         require(lines.isNotEmpty()) { "Purchase order has no item lines" }
         val allocations = dao.getSaleAllocations()
