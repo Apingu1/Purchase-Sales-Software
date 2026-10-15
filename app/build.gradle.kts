@@ -12,8 +12,12 @@ android {
     namespace = "com.apingu.purchasesales"
     compileSdk = 35
 
+    buildFeatures { buildConfig = true; compose = true }
+
     defaultConfig {
         applicationId = "com.apingu.purchasesales"
+        buildConfigField("String", "MICROSOFT_CLIENT_ID", "\"${System.getenv("PURCHASE_SALES_MS_CLIENT_ID") ?: ""}\"")
+        manifestPlaceholders["appAuthRedirectScheme"] = "com.apingu.purchasesales"
         minSdk = 28
         targetSdk = 35
         versionCode = ciVersionCode ?: 2
@@ -78,6 +82,8 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
 
     implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("net.openid:appauth:0.11.1")
+    implementation("com.google.android.gms:play-services-auth:21.3.0")
     implementation("androidx.documentfile:documentfile:1.0.1")
 
     testImplementation("junit:junit:4.13.2")
