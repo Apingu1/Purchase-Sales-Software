@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -38,6 +39,7 @@ import java.io.File
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
+    val context = LocalContext.current
     val orders by vm.purchaseOrders.collectAsStateWithLifecycle()
     val docs by vm.purchaseInvoices.collectAsStateWithLifecycle()
     val suggestions by vm.pendingInvoiceCandidates.collectAsStateWithLifecycle()
@@ -46,6 +48,7 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
     var target by remember { mutableStateOf<Long?>(null) }
     var preview by remember { mutableStateOf<PurchaseInvoiceEntity?>(null) }
     var reject by remember { mutableStateOf<InvoiceCandidateEntity?>(null) }
+    var candidatePreview by remember { mutableStateOf<Pair<String, String>?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
         target?.let { if (uris.isNotEmpty()) vm.addPurchaseInvoices(it, uris) }
         target = null
@@ -106,14 +109,26 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         items(filtered, key = { it.id }) { c ->
+                            val staged = InvoiceCandidateCache.previewFile(context, c.id)
                             ElevatedCard(Modifier.fillMaxWidth()) {
                                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text(orderMap[c.purchaseOrderId]?.supplier ?: "Purchase unavailable",
                                         fontWeight = FontWeight.SemiBold)
                                     Text(c.originalFileName)
                                     Text("Mailbox: " + c.accountEmail, style = MaterialTheme.typography.bodySmall)
-                                    Text("Attachment preview and approval require the upcoming email retrieval connector.",
-                                        style = MaterialTheme.typography.bodySmall)
+                                    if (staged == null) {
+                                        Text("Attachment not yet fetched. Preview and approval become available after the email connector retrieves the file.",
+                                            style = MaterialTheme.typography.bodySmall)
+                                    } else {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                            Button({ candidatePreview = staged.absolutePath to c.originalFileName }) {
+                                                Icon(Icons.Default.Visibility, null); Text(" Preview")
+                                            }
+                                            Button({ vm.approveFoundInvoice(c.id) }) {
+                                                Icon(Icons.Default.Check, null); Text(" Approve")
+                                            }
+                                        }
+                                    }
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                         OutlinedButton({ nav.navigate("purchase/" + c.purchaseOrderId) }) { Text("Open purchase") }
                                         OutlinedButton({ reject = c }) { Text("Reject match") }
@@ -163,6 +178,9 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
                 }
             }
         }
+    }
+    candidatePreview?.let { item ->
+        InvoiceFilePreview(item.first, item.second) { candidatePreview = null }
     }
     preview?.let { doc ->
         val order = orderMap[doc.purchaseOrderId]

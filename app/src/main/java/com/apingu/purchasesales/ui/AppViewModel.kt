@@ -124,6 +124,9 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     fun rejectFoundInvoice(candidateId: Long) =
         action("Invoice suggestion rejected") { repo.rejectInvoiceCandidate(candidateId) }
 
+    fun approveFoundInvoice(candidateId: Long) =
+        action("Invoice approved and attached") { repo.approveInvoiceCandidate(candidateId) }
+
     fun savePurchase(value: PurchaseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) = action("Purchase saved", onSuccess) { repo.savePurchase(value, attachmentUri) }
     fun markReceivedAll(value: PurchaseEntity) = action("Purchase received") { repo.markReceivedAll(value) }
 

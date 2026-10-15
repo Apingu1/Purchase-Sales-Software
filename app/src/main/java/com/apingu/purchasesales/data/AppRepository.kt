@@ -441,6 +441,69 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             status = "REJECTED",
             reviewedAtMillis = System.currentTimeMillis()
         ))
+        InvoiceCandidateCache.discard(context, candidateId)
+    }
+
+    /**
+     * Candidate approval is deliberately constrained to its recorded purchase
+     * and EXACT originating purchasing mailbox, never any other account.
+     */
+    suspend fun approveInvoiceCandidate(candidateId: Long): Long {
+        val candidate = dao.getInvoiceCandidate(candidateId) ?: error("Candidate not found")
+        require(candidate.status == "PENDING_REVIEW") { "Candidate already reviewed" }
+        val order = dao.getPurchaseOrder(candidate.purchaseOrderId) ?: error("Purchase order not found")
+        require(order.orderNumber.isNotBlank()) { "The purchase order number is missing" }
+        require(order.accountUsername.trim().equals(candidate.accountEmail.trim(), ignoreCase = true)) {
+            "Candidate belongs to a different purchasing mailbox"
+        }
+        val preview = InvoiceCandidateCache.previewFile(context, candidateId)
+            ?: error("Preview is unavailable; retrieve the email attachment again")
+        val dir = File(context.filesDir, "documents").apply { mkdirs() }
+        val saved = File(dir, "EMAIL_INV_" + order.id + "_" + java.util.UUID.randomUUID() +
+            "." + preview.extension)
+        try {
+            preview.copyTo(saved)
+            val hash = PurchaseInvoiceFiles.fingerprint(saved)
+            val newId = db.withTransaction {
+                val current = dao.getInvoiceCandidate(candidateId) ?: error("Candidate not found")
+                require(current.status == "PENDING_REVIEW") { "Candidate already reviewed" }
+                val currentOrder = dao.getPurchaseOrder(current.purchaseOrderId)
+                    ?: error("Purchase order not found")
+                require(currentOrder.orderNumber.isNotBlank() &&
+                    currentOrder.accountUsername.trim().equals(current.accountEmail.trim(), ignoreCase = true)) {
+                    "Purchase order or source mailbox has changed"
+                }
+                require(dao.getPurchaseInvoices(current.purchaseOrderId).none { invoice ->
+                    val priorHash = invoice.sha256.ifBlank {
+                        runCatching { PurchaseInvoiceFiles.fingerprint(invoice.filePath).sha256 }.getOrDefault("")
+                    }
+                    priorHash == hash.sha256
+                }) { "This invoice is already attached to the purchase" }
+                val id = dao.insertPurchaseInvoice(PurchaseInvoiceEntity(
+                    purchaseOrderId = current.purchaseOrderId,
+                    invoiceOrdinal = dao.nextInvoiceOrdinal(current.purchaseOrderId),
+                    filePath = saved.absolutePath,
+                    originalFileName = current.originalFileName,
+                    source = "EMAIL",
+                    sourceAccountEmail = current.accountEmail,
+                    sourceMessageId = current.messageId,
+                    sourceAttachmentId = current.attachmentId,
+                    sha256 = hash.sha256,
+                    byteSize = hash.byteSize
+                ))
+                dao.updateInvoiceCandidate(current.copy(
+                    status = "APPROVED",
+                    reviewedAtMillis = System.currentTimeMillis()
+                ))
+                id
+            }
+            InvoiceCandidateCache.discard(context, candidateId)
+            enqueueSync()
+            return newId
+        } catch (error: Exception) {
+            saved.delete()
+            throw error
+        }
     }
 
     /**
