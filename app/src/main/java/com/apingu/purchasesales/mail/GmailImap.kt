@@ -59,8 +59,10 @@ object GmailImapCredentials {
         val encoded = Base64.encodeToString(
             cipher.iv + cipher.doFinal(normalized.toByteArray(Charsets.UTF_8)), Base64.NO_WRAP
         )
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-            .edit().putString(identifier(email), encoded).commit()
+        check(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit().putString(identifier(email), encoded).commit()) {
+            "Unable to securely save this Gmail App Password"
+        }
     }
 
     fun load(context: Context, email: String): String {
