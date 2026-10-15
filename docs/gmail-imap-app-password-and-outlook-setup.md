@@ -80,3 +80,26 @@ The default **Connect Outlook** action now uses an external system browser (not 
 During testing, choose one browser route, complete all steps on Microsoft's sign-in page, and allow the device to switch automatically to Purchase & Sales. Do not press Android Back or close the tab. If a consent/error page appears, capture the error code shown (but not authentication URLs, passwords, PINs or tokens).
 
 Because the code cannot simulate a personal Outlook browser session in GitHub Actions, **successful CI does not establish successful login**. Confirm successful on-device return and connected mailbox before handing the feature to additional users.
+
+
+### Direct OAuth browser callback (October 15, 2026)
+
+Previous versions called AppAuth's `AuthorizationManagementActivity` and received
+`USER_CANCELED_AUTH_FLOW` before Microsoft's final redirect, even after users
+tried both Chrome and Custom Tabs. This was not a reliable indication that the
+user pressed Back. The sign-in code now **bypasses only AppAuth browser
+management**: it builds the official Microsoft authorization request with AppAuth's
+random state and S256 PKCE verifier, saves the short-lived request encrypted in
+Android Keystore, launches the official Microsoft URL in the system browser, and
+receives `com.apingu.purchasesales://oauth2redirect` directly in the Android
+`MicrosoftOAuthResultActivity` intent filter. The app validates the redirect
+host/scheme and compares the returned state with the saved state before passing
+the code to AppAuth for its normal token exchange and refresh. Valid OAuth
+requests are single-use and expire after 30 minutes. Neither password nor
+OAuth code is displayed in diagnostics or persisted as a long-lived credential.
+
+Only a real browser return can establish whether Microsoft sign-in works on a
+particular phone. If it does not, ask the user which Microsoft screen they saw
+immediately before being returned or stuck in the browser and capture any
+Microsoft error code (not authentication URLs, passwords or tokens). A crash
+logcat or Azure sign-in log may help if the phone still force-closes.
