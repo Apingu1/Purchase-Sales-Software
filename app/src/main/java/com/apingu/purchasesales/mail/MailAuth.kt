@@ -76,7 +76,7 @@ object MailCredentialVault {
 /** Connections use the current native app's signing key/redirect registration. */
 object MailOAuth {
     const val GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
-    const val MS_REDIRECT = "com.apingu.purchasesales:/oauth2redirect"
+    const val MS_REDIRECT = "com.apingu.purchasesales://oauth2redirect"
     private val MS_SCOPES = "User.Read Mail.Read offline_access"
     private val configuration by lazy {
         AuthorizationServiceConfiguration(
