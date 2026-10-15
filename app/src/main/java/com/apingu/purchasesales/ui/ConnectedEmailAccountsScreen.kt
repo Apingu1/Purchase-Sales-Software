@@ -20,7 +20,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
-import com.apingu.purchasesales.BuildConfig
 import com.apingu.purchasesales.data.EmailAccountEntity
 import com.apingu.purchasesales.mail.MailOAuth
 import com.apingu.purchasesales.mail.MailConnectionSettings
@@ -121,7 +120,7 @@ fun ConnectedEmailAccountsScreen(vm: AppViewModel, nav: NavHostController) {
                                 googleResult.launch(it)
                             },
                             complete = { vm.connectGmailToken(it, googleAddress.trim()) },
-                            error = vm::reportMailboxError,
+                            error = ::showConnectionProblem,
                             accountEmail = googleAddress.trim().ifBlank { null }
                         )
                     }, modifier = Modifier.fillMaxWidth()
