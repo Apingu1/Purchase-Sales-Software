@@ -150,13 +150,13 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
         val p: List<PurchaseEntity>, val s: List<SaleEntity>, val l: List<SaleLineEntity>,
         val a: List<SaleAllocationEntity>, val r: List<SaleReturnEntity>
     )
-    private data class FinancePart2(val f: FinancePart, val ra: List<SaleReturnAllocationEntity>, val e: List<ExpenseEntity>)
+    private data class FinancePart2(val f: FinancePart, val ra: List<SaleReturnAllocationEntity>, val e: List<ExpenseEntity>, val orders: List<PurchaseOrderEntity>)
 
     private val financePart = combine(purchases, sales, saleLines, allocations, saleReturns) { p, s, l, a, r -> FinancePart(p, s, l, a, r) }
-    private val financePart2 = combine(financePart, returnAllocations, expenses) { f, ra, e -> FinancePart2(f, ra, e) }
+    private val financePart2 = combine(financePart, returnAllocations, expenses, purchaseOrders) { f, ra, e, orders -> FinancePart2(f, ra, e, orders) }
     val summary = combine(selectedAccountingPeriod, financePart2) { period, d ->
         if (period == null) FinanceSummary()
-        else buildFinanceSummary(period.startEpochDay, period.endEpochDay, d.f.p, d.f.s, d.f.l, d.f.a, d.f.r, d.ra, d.e)
+        else buildFinanceSummary(period.startEpochDay, period.endEpochDay, d.f.p, d.f.s, d.f.l, d.f.a, d.f.r, d.ra, d.e, d.orders)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), FinanceSummary())
 
     private val _message = MutableStateFlow<String?>(null)
@@ -349,7 +349,13 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
                 .take(stockCapacity)
 
             availableIdentifiers.forEach { identifier ->
-                candidatesByItem.getOrPut(key) { mutableListOf() } += ImeiCandidate(identifier, purchase.id)
+                val sourceOrder = allOrders[purchase.purchaseOrderId]
+                candidatesByItem.getOrPut(key) { mutableListOf() } += ImeiCandidate(
+                    identifier = identifier,
+                    purchaseId = purchase.id,
+                    supplier = sourceOrder?.supplier?.ifBlank { purchase.supplier } ?: purchase.supplier,
+                    orderDateEpochDay = sourceOrder?.purchaseDateEpochDay ?: purchase.purchaseDateEpochDay
+                )
             }
         }
 
@@ -519,7 +525,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     fun exportExcel(uri: Uri) = action("Excel workbook exported") {
         val period = selectedAccountingPeriod.value ?: error("Set an accounting period first")
         val data = repo.getFullData()
-        val summary = buildFinanceSummary(period.startEpochDay, period.endEpochDay, data.purchases, data.sales, data.saleLines, data.allocations, data.saleReturns, data.returnAllocations, data.expenses)
+        val summary = buildFinanceSummary(period.startEpochDay, period.endEpochDay, data.purchases, data.sales, data.saleLines, data.allocations, data.saleReturns, data.returnAllocations, data.expenses, data.purchaseOrders)
         val temp = File(context.cacheDir, "Business_Records_${safePeriodFileName(period.name)}.xlsx")
         XlsxExport.create(
             temp,
@@ -530,7 +536,8 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
             data.creditNotes.filter { it.creditDateEpochDay in period.startEpochDay..period.endEpochDay },
             data.customers,
             data.expenses.filter { it.expenseDateEpochDay in period.startEpochDay..period.endEpochDay },
-            summary
+            summary,
+            data.purchaseOrders.filter { it.purchaseDateEpochDay in period.startEpochDay..period.endEpochDay }
         )
         context.contentResolver.openOutputStream(uri).use { out -> requireNotNull(out); temp.inputStream().use { it.copyTo(out) } }
     }
