@@ -436,6 +436,25 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
         lineIds.forEach { ImeiAssignmentStore.clear(context, it) }
     }
 
+    /** Prepare the existing sales PDF for an in-app preview; recreate it if it was removed.
+     *  No document picker or external file export is involved.
+     */
+    fun prepareSaleInvoicePreview(saleId: Long, onReady: (String) -> Unit) {
+        viewModelScope.launch {
+            runCatching {
+                var sale = dao.getSale(saleId) ?: error("Sales invoice not found")
+                var file = sale.pdfPath?.let(::File)
+                if (file == null || !file.isFile) {
+                    refreshTraceableInvoice(saleId)
+                    sale = dao.getSale(saleId) ?: error("Sales invoice not found")
+                    file = sale.pdfPath?.let(::File)
+                }
+                requireNotNull(file?.takeIf { it.isFile }) { "Sales invoice PDF is not available" }.absolutePath
+            }.onSuccess(onReady)
+                .onFailure { _message.value = it.message ?: "Unable to preview sales invoice" }
+        }
+    }
+
     fun exportSaleInvoice(saleId: Long, uri: Uri) = action("Sales invoice downloaded") {
         var sale = dao.getSale(saleId) ?: error("Sales invoice not found")
         var source = sale.pdfPath?.let(::File)
