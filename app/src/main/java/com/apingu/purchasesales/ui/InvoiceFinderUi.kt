@@ -326,7 +326,7 @@ private sealed interface PreviewResult {
 
 /** On-device PDF/image preview. No external viewer or explicit file download required. */
 @Composable
-private fun InvoiceFilePreview(path: String, name: String, onClose: () -> Unit) {
+fun InvoiceFilePreview(path: String, name: String, onClose: () -> Unit) {
     var page by remember(path) { mutableIntStateOf(0) }
     val result by produceState<PreviewResult>(PreviewResult.Loading, path, page) {
         value = PreviewResult.Loading
