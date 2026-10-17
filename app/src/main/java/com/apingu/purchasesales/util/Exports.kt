@@ -196,7 +196,8 @@ object XlsxExport {
         creditNotes: List<CreditNoteEntity>,
         customers: List<CustomerEntity>,
         expenses: List<ExpenseEntity>,
-        summary: FinanceSummary
+        summary: FinanceSummary,
+        purchaseOrders: List<PurchaseOrderEntity> = emptyList()
     ) {
         val customerMap = customers.associateBy { it.id }
         val purHeaders = listOf("NO", "STORE", "INVOICE DATE", "MODEL", "NET", "VAT", "GROSS", "Unit Price", "QTY", "TOTAL", "Notes (please comment about reverse charge etc)")
@@ -221,6 +222,21 @@ object XlsxExport {
                     }
                 )
             }
+        }
+
+        // Show delivery as an explicit non-inventory purchase cost, once per order.
+        // Qty stays zero, so exports never suggest delivery has stock or IMEI units.
+        purchaseOrders.filter { it.deliveryGrossPence > 0 }.forEach { order ->
+            val delivery = breakdownFromGross(order.deliveryGrossPence, order.vatType)
+            purRows += listOf(
+                purRows.size + 1, order.supplier, editDate(order.purchaseDateEpochDay),
+                "DELIVERY CHARGE (NON-INVENTORY)",
+                delivery.netPence / 100.0, delivery.vatPence / 100.0,
+                delivery.grossPence / 100.0, null, 0,
+                delivery.grossPence / 100.0,
+                "Order ${order.orderNumber.ifBlank { order.id.toString() }} • Delivery only • ${VatTypes.label(order.vatType)}" +
+                    if (delivery.reverseVatPence > 0) " • Notional reverse VAT ${formatMoney(delivery.reverseVatPence)}" else ""
+            )
         }
 
         val saleHeaders = listOf("No", "INV.NO", "DATE", "COMPANY", "NET", "VAT", "GROSS", "REVERSE CHARGES", "Notes")
@@ -273,7 +289,9 @@ object XlsxExport {
             listOf("Sales (net)", summary.salesNet / 100.0),
             listOf("Cost of goods sold", summary.cogsNet / 100.0),
             listOf("Gross profit", summary.grossProfit / 100.0),
-            listOf("Expenses (net)", summary.expensesNet / 100.0),
+            listOf("Expenses including delivery (net)", summary.expensesNet / 100.0),
+            listOf("Purchase delivery (net, included above)", summary.deliveryNet / 100.0),
+            listOf("Purchase delivery (gross)", summary.deliveryGross / 100.0),
             listOf("Net trading profit", summary.netProfit / 100.0),
             listOf("Output VAT", summary.outputVat / 100.0),
             listOf("Input VAT", summary.inputVat / 100.0),
