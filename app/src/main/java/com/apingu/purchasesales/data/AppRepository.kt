@@ -59,7 +59,8 @@ data class PurchaseOrderDraft(
     val paymentMethod: String,
     val notes: String,
     val items: List<PurchaseItemDraft>,
-    val existingInvoicePath: String? = null
+    val existingInvoicePath: String? = null,
+    val deliveryGrossPence: Long = 0
 )
 
 data class SaleLineDraft(val item: String, val quantity: Int, val unitNetPence: Long)
@@ -243,6 +244,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
 
     suspend fun savePurchaseOrder(draft: PurchaseOrderDraft, attachmentUri: Uri? = null): Long {
         require(draft.supplier.isNotBlank()) { "Supplier/store is required" }
+        require(draft.deliveryGrossPence >= 0) { "Delivery charge cannot be negative" }
         require(draft.items.isNotEmpty()) { "Add at least one item" }
         draft.items.forEach(::validatePurchaseItem)
 
@@ -286,7 +288,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 notes = draft.notes.trim(),
                 updatedAtMillis = now,
                 invoiceSequence = sequence,
-                invoiceSupplierKey = supplierKey
+                invoiceSupplierKey = supplierKey,
+                deliveryGrossPence = draft.deliveryGrossPence
             )
             val savedOrderId = if (existingOrder == null) dao.insertPurchaseOrder(header) else {
                 dao.updatePurchaseOrder(header)
@@ -632,7 +635,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 id = header?.id ?: 0, dateEpochDay = draft.dateEpochDay, supplier = draft.supplier,
                 orderNumber = draft.orderNumber, accountUsername = draft.accountUsername, vatType = draft.vatType,
                 paymentMethod = draft.paymentMethod, notes = draft.notes, items = itemDrafts,
-                existingInvoicePath = header?.invoicePath ?: draft.existingInvoicePath
+                existingInvoicePath = header?.invoicePath ?: draft.existingInvoicePath,
+                deliveryGrossPence = header?.deliveryGrossPence ?: 0
             ), attachmentUri
         )
         return if (existing != null) existing.id else dao.getPurchasesForOrder(savedOrderId).first().id
