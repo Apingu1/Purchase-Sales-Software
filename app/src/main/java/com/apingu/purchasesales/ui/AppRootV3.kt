@@ -408,7 +408,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
     var orderNo by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(if (isDuplicate) "" else sourceOrder?.orderNumber.orEmpty()) }
     var account by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.accountUsername.orEmpty()) }
     var vatType by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.vatType ?: VatTypes.STANDARD) }
-    var deliveryCharge by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(formatMoneyPlain(sourceOrder?.deliveryGrossPence ?: 0L)) }
+    var deliveryCharge by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(formatMoneyPlain(if (isDuplicate) 0L else sourceOrder?.deliveryGrossPence ?: 0L)) }
     var payment by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.paymentMethod.orEmpty()) }
     var orderNotes by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(if (isDuplicate) "" else sourceOrder?.notes.orEmpty()) }
     var attachment by remember { mutableStateOf<Uri?>(null) }
@@ -460,7 +460,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
             if (isDuplicate) {
                 ElevatedCard(Modifier.fillMaxWidth()) {
                     Text(
-                        "Copied from ${duplicateOrder?.orderNumber.orEmpty().ifBlank { "the original order" }}. Order number, order notes, item IMEI/serial notes, receipt/refund fields and invoice attachment are intentionally blank. Enter the new order-specific details before saving.",
+                        "Copied from ${duplicateOrder?.orderNumber.orEmpty().ifBlank { "the original order" }}. Order number, order notes, item IMEI/serial notes, receipt/refund fields, delivery charge and invoice attachment are intentionally blank. Enter the new order-specific details before saving.",
                         Modifier.padding(12.dp),
                         style = MaterialTheme.typography.bodySmall
                     )
