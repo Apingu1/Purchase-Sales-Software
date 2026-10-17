@@ -34,6 +34,7 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
     var deleteSale by remember { mutableStateOf<SaleEntity?>(null) }
     var deleteCredit by remember { mutableStateOf<CreditNoteEntity?>(null) }
     var downloadSale by remember { mutableStateOf<SaleEntity?>(null) }
+    var previewSale by remember { mutableStateOf<Pair<String, String>?>(null) }
     var downloadCredit by remember { mutableStateOf<CreditNoteEntity?>(null) }
 
     val invoiceDownloadLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/pdf")) { uri ->
@@ -108,22 +109,30 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
                                             Text(" Edit")
                                         }
                                         TextButton({
+                                            vm.prepareSaleInvoicePreview(sale.id) { path ->
+                                                previewSale = path to (sale.invoiceNo + ".pdf")
+                                            }
+                                        }) {
+                                            Icon(Icons.Default.Visibility, null)
+                                            Text(" Preview PDF")
+                                        }
+                                    }
+                                    Row {
+                                        TextButton({
                                             downloadSale = sale
                                             invoiceDownloadLauncher.launch("${sale.invoiceNo}.pdf")
                                         }) {
                                             Icon(Icons.Default.Download, null)
                                             Text(" Download PDF")
                                         }
-                                    }
-                                    Row {
                                         TextButton({ nav.navigate("credit-note/${sale.id}") }) {
                                             Icon(Icons.Default.KeyboardReturn, null)
                                             Text(" Issue credit note")
                                         }
-                                        TextButton({ deleteSale = sale }) {
-                                            Icon(Icons.Default.DeleteOutline, null)
-                                            Text(" Delete invoice")
-                                        }
+                                    }
+                                    TextButton({ deleteSale = sale }) {
+                                        Icon(Icons.Default.DeleteOutline, null)
+                                        Text(" Delete invoice")
                                     }
                                 }
                             }
@@ -166,6 +175,10 @@ fun SalesScreen(vm: AppViewModel, nav: NavHostController) {
                 }
             }
         }
+    }
+
+    previewSale?.let { (path, name) ->
+        InvoiceFilePreview(path, name) { previewSale = null }
     }
 
     deleteCredit?.let { credit ->

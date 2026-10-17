@@ -9,10 +9,12 @@ on:
       - feature/invoice-finder-email-dropbox
       - feature/mail-oauth-connection-fix
       - feature/gmail-imap-app-password-outlook
+      - feature/sales-preview-delivery-imei-supplier-ux
   pull_request:
     branches:
       - main
       - feature/android-v1-complete
+      - feature/gmail-imap-app-password-outlook
   workflow_dispatch:
 
 permissions:

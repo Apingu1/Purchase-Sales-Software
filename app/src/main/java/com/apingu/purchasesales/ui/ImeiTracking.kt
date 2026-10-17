@@ -4,6 +4,9 @@ import android.content.Context
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.rememberScrollState
@@ -25,6 +28,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.apingu.purchasesales.data.PurchaseEntity
+import com.apingu.purchasesales.util.displayDate
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -33,7 +37,9 @@ import org.json.JSONArray
 /** One available IMEI / serial identifier and the purchase line it belongs to. */
 data class ImeiCandidate(
     val identifier: String,
-    val purchaseId: Long
+    val purchaseId: Long,
+    val supplier: String = "",
+    val orderDateEpochDay: Long = 0
 )
 
 data class ImeiSelectionGroup(
@@ -157,36 +163,53 @@ fun ImeiSelectionOverlay() {
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    "Some of this item will remain in inventory. Select exactly which identifiers are being sold on this invoice.",
+                    "Select the exact devices being sold. Supplier and purchase order date are shown for each available IMEI.",
                     style = MaterialTheme.typography.bodyMedium
                 )
                 active.groups.forEach { group ->
-                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(group.item, fontWeight = FontWeight.Bold)
                         Text(
-                            "Choose ${group.requiredQuantity} of ${group.totalAvailableQuantity} available unit${if (group.totalAvailableQuantity == 1) "" else "s"}.",
+                            "Choose ${group.requiredQuantity} of ${group.totalAvailableQuantity} available units.",
                             style = MaterialTheme.typography.bodySmall
                         )
-                        group.candidates.forEach { candidate ->
-                            val current = selected[group.key].orEmpty()
-                            val checked = candidate.identifier in current
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = checked,
-                                    onCheckedChange = { newValue ->
-                                        val updated = current.toMutableSet()
-                                        if (newValue) {
-                                            if (updated.size < group.requiredQuantity) updated += candidate.identifier
-                                        } else {
-                                            updated -= candidate.identifier
+                        // Borderless column headings stay visible while the identifiers
+                        // scroll independently underneath them.
+                        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Spacer(Modifier.width(48.dp))
+                            Text("IMEI / SN", Modifier.weight(0.44f),
+                                style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                            Text("Supplier", Modifier.weight(0.32f),
+                                style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                            Text("Order date", Modifier.weight(0.24f),
+                                style = MaterialTheme.typography.labelMedium, fontWeight = FontWeight.Bold)
+                        }
+                        Column(Modifier.heightIn(max = 260.dp).verticalScroll(rememberScrollState())) {
+                            group.candidates.forEach { candidate ->
+                                val current = selected[group.key].orEmpty()
+                                val checked = candidate.identifier in current
+                                Row(Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(
+                                        checked = checked,
+                                        onCheckedChange = { newValue ->
+                                            val updated = current.toMutableSet()
+                                            if (newValue) {
+                                                if (updated.size < group.requiredQuantity) updated += candidate.identifier
+                                            } else {
+                                                updated -= candidate.identifier
+                                            }
+                                            selected = selected + (group.key to updated)
                                         }
-                                        selected = selected + (group.key to updated)
-                                    }
-                                )
-                                Text(candidate.identifier)
+                                    )
+                                    Text(candidate.identifier, Modifier.weight(0.44f),
+                                        style = MaterialTheme.typography.bodySmall)
+                                    Text(candidate.supplier.ifBlank { "Unknown" }, Modifier.weight(0.32f),
+                                        style = MaterialTheme.typography.bodySmall)
+                                    Text(if (candidate.orderDateEpochDay > 0) displayDate(candidate.orderDateEpochDay) else "—",
+                                        Modifier.weight(0.24f), style = MaterialTheme.typography.bodySmall)
+                                }
                             }
                         }
                         Text(
@@ -214,7 +237,7 @@ fun ImeiSelectionOverlay() {
     )
 }
 
-private const val WHATS_NEW_VERSION = "2026-10-15-multi-invoice-finder-mail-v1"
+private const val WHATS_NEW_VERSION = "2026-10-17-sales-preview-delivery-imei-supplier-v1"
 
 @Composable
 fun WhatsNewNotice() {
@@ -236,7 +259,13 @@ fun WhatsNewNotice() {
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("15 October 2026 update", fontWeight = FontWeight.Bold)
+                Text("17 October 2026 update", fontWeight = FontWeight.Bold)
+                Text("• Sales invoice preview: open generated sales PDFs directly inside the app from the Sales tab, with page navigation. Downloading is still available separately.")
+                Text("• Purchase delivery charges: enter a gross delivery amount (default £0.00). Delivery is not inventory; it appears in order totals, dashboard profit/VAT calculations and the purchase Excel/VAT worksheet.")
+                Text("• IMEI picker: select serials from a clean, borderless IMEI / SN, Supplier, Order date table with column headings that stay visible while the device rows scroll.")
+                Text("• Supplier entry: previous-supplier matches now expand inline only when requested, rather than popping over the input after each keystroke.")
+                androidx.compose.material3.HorizontalDivider()
+                Text("Previously added — 15 October 2026", fontWeight = FontWeight.Bold)
                 Text("• Multiple supplier invoices: attach and manage more than one PDF or image invoice against a single purchase order, including split invoices. Add multiple documents at once, preview each one and avoid duplicate attachments.")
                 Text("• Invoice Finder: a dedicated invoice centre with Pending Review, Approved and Missing tabs. Run an on-demand search for missing invoices by order number against ONLY the exact purchasing email account recorded on each purchase.")
                 Text("• Review before saving: preview PDF, JPG/JPEG and PNG attachments found in email, then approve or reject candidates. Approved invoices are associated with their original purchase; nothing is approved automatically.")

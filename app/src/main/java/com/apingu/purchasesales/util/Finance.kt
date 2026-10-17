@@ -86,7 +86,9 @@ data class FinanceSummary(
     val reverseInputVat: Long = 0,
     val vatPosition: Long = 0,
     val inventoryValue: Long = 0,
-    val refundsPending: Long = 0
+    val refundsPending: Long = 0,
+    val deliveryGross: Long = 0,
+    val deliveryNet: Long = 0
 )
 
 fun buildInventory(
@@ -127,7 +129,8 @@ fun buildFinanceSummary(
     allocations: List<SaleAllocationEntity>,
     returns: List<SaleReturnEntity>,
     returnAllocations: List<SaleReturnAllocationEntity>,
-    expenses: List<ExpenseEntity>
+    expenses: List<ExpenseEntity>,
+    purchaseOrders: List<PurchaseOrderEntity> = emptyList()
 ): FinanceSummary {
     val s = sales.filter { it.saleDateEpochDay in start..end }
     val e = expenses.filter { it.expenseDateEpochDay in start..end }
@@ -145,7 +148,13 @@ fun buildFinanceSummary(
     val salesReturnNet = salesReturns.sumOf { it.refundNetPence }
     val salesReturnVat = salesReturns.sumOf { it.refundVatPence }
     val salesNet = s.sumOf { it.netPence } - salesReturnNet
-    val expensesNet = e.sumOf { it.netPence }
+    // Delivery belongs to the purchase order, not its stock lines. Count each order once
+    // regardless of how many inventory lines the order contains.
+    val delivery = purchaseOrders.filter { it.purchaseDateEpochDay in start..end }
+        .map { breakdownFromGross(it.deliveryGrossPence, it.vatType) }
+    val deliveryNet = delivery.sumOf { it.netPence }
+    val deliveryGross = delivery.sumOf { it.grossPence }
+    val expensesNet = e.sumOf { it.netPence } + deliveryNet
     val outputVat = s.sumOf { it.vatPence } - salesReturnVat
 
     val supplierRefundVat = p.sumOf { it.refundVatPence.coerceAtMost(it.vatPence) }
@@ -158,8 +167,8 @@ fun buildFinanceSummary(
             if (creditGross > 0) breakdownFromGross(creditGross, VatTypes.REVERSE).reverseVatPence else 0
         }
     }
-    val inputVat = p.sumOf { it.vatPence } - supplierRefundVat + e.sumOf { it.vatPence }
-    val reverseInput = p.sumOf { it.reverseVatPence } - supplierReverseCredit + e.sumOf { it.reverseVatPence }
+    val inputVat = p.sumOf { it.vatPence } - supplierRefundVat + e.sumOf { it.vatPence } + delivery.sumOf { it.vatPence }
+    val reverseInput = p.sumOf { it.reverseVatPence } - supplierReverseCredit + e.sumOf { it.reverseVatPence } + delivery.sumOf { it.reverseVatPence }
     val reverseOutput = reverseInput
     val inventory = buildInventory(purchases, allocations, returnAllocations).sumOf { it.inventoryNetCostPence }
 
@@ -191,6 +200,8 @@ fun buildFinanceSummary(
         reverseInputVat = reverseInput,
         vatPosition = outputVat + reverseOutput - inputVat - reverseInput,
         inventoryValue = inventory,
-        refundsPending = refundsPending
+        refundsPending = refundsPending,
+        deliveryGross = deliveryGross,
+        deliveryNet = deliveryNet
     )
 }

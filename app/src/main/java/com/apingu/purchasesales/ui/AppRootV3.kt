@@ -152,6 +152,7 @@ private fun DashboardScreenV3(vm: AppViewModel, nav: NavHostController) {
             }
             item { ResponsiveMetricPair("Net sales", formatMoney(summary.salesNet), "Net profit", formatMoney(summary.netProfit)) }
             item { ResponsiveMetricPair("Inventory", formatMoney(summary.inventoryValue), "Refunds pending", formatMoney(summary.refundsPending)) }
+            item { ResponsiveMetricPair("Purchase delivery (gross)", formatMoney(summary.deliveryGross), "Delivery expense (net)", formatMoney(summary.deliveryNet)) }
             item {
                 val vatLabel = if (summary.vatPosition >= 0) "VAT due to HMRC" else "VAT refund expected"
                 ElevatedCard(Modifier.fillMaxWidth()) {
@@ -295,7 +296,7 @@ private fun PurchaseOrderCardV3(order: PurchaseOrderEntity, lines: List<Purchase
     val canDuplicate = isPending || status == "RECEIVED"
     var menuExpanded by remember(order.id) { mutableStateOf(false) }
     var confirmDelete by remember(order.id) { mutableStateOf(false) }
-    val totalGross = lines.sumOf { it.grossPence }
+    val totalGross = lines.sumOf { it.grossPence } + order.deliveryGrossPence
     val totalQty = lines.sumOf { it.quantity }
     val received = lines.sumOf { it.receivedQty }
     val returned = lines.sumOf { it.returnedQty }
@@ -342,6 +343,7 @@ private fun PurchaseOrderCardV3(order: PurchaseOrderEntity, lines: List<Purchase
             }
             Text(itemText)
             Text("${lines.size} item line${if (lines.size == 1) "" else "s"} • Qty $totalQty • ${formatMoney(totalGross)} • ${VatTypes.label(order.vatType)}", style = MaterialTheme.typography.bodySmall)
+            if (order.deliveryGrossPence > 0) Text("Includes delivery ${formatMoney(order.deliveryGrossPence)} (non-inventory)", style = MaterialTheme.typography.bodySmall)
             Text("Received $received • Returned $returned", style = MaterialTheme.typography.bodySmall)
             if (partialCredits > 0) Text("Partial refund credits ${formatMoney(partialCredits)}", style = MaterialTheme.typography.bodySmall)
             if (isPending) {
@@ -406,6 +408,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
     var orderNo by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(if (isDuplicate) "" else sourceOrder?.orderNumber.orEmpty()) }
     var account by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.accountUsername.orEmpty()) }
     var vatType by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.vatType ?: VatTypes.STANDARD) }
+    var deliveryCharge by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(formatMoneyPlain(if (isDuplicate) 0L else sourceOrder?.deliveryGrossPence ?: 0L)) }
     var payment by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(sourceOrder?.paymentMethod.orEmpty()) }
     var orderNotes by remember(sourceOrder?.id, isDuplicate) { mutableStateOf(if (isDuplicate) "" else sourceOrder?.notes.orEmpty()) }
     var attachment by remember { mutableStateOf<Uri?>(null) }
@@ -435,12 +438,20 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
     }
 
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { attachment = it }
-    val totalGross = forms.sumOf { form ->
+    val deliveryPence = runCatching { moneyToPence(deliveryCharge.ifBlank { "0" }) }.getOrNull()
+    val deliveryValid = deliveryPence != null && deliveryPence >= 0
+    val itemBreakdowns = forms.map { form ->
         val unitGross = runCatching { moneyToPence(form.gross) }.getOrDefault(0)
         val quantity = (form.quantity.toIntOrNull() ?: 0).coerceAtLeast(0)
-        unitGross * quantity.toLong()
+        breakdownFromGross(unitGross * quantity.toLong(), vatType)
     }
-    val totalBreakdown = breakdownFromGross(totalGross, vatType)
+    val deliveryBreakdown = breakdownFromGross(deliveryPence?.coerceAtLeast(0) ?: 0L, vatType)
+    val totalBreakdown = VatBreakdown(
+        itemBreakdowns.sumOf { it.netPence } + deliveryBreakdown.netPence,
+        itemBreakdowns.sumOf { it.vatPence } + deliveryBreakdown.vatPence,
+        itemBreakdowns.sumOf { it.grossPence } + deliveryBreakdown.grossPence,
+        itemBreakdowns.sumOf { it.reverseVatPence } + deliveryBreakdown.reverseVatPence
+    )
     val totalQty = forms.sumOf { it.quantity.toIntOrNull() ?: 0 }
     val title = when { isDuplicate -> "Duplicate purchase"; id == 0L -> "New purchase"; else -> "Edit purchase" }
 
@@ -449,7 +460,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
             if (isDuplicate) {
                 ElevatedCard(Modifier.fillMaxWidth()) {
                     Text(
-                        "Copied from ${duplicateOrder?.orderNumber.orEmpty().ifBlank { "the original order" }}. Order number, order notes, item IMEI/serial notes, receipt/refund fields and invoice attachment are intentionally blank. Enter the new order-specific details before saving.",
+                        "Copied from ${duplicateOrder?.orderNumber.orEmpty().ifBlank { "the original order" }}. Order number, order notes, item IMEI/serial notes, receipt/refund fields, delivery charge and invoice attachment are intentionally blank. Enter the new order-specific details before saving.",
                         Modifier.padding(12.dp),
                         style = MaterialTheme.typography.bodySmall
                     )
@@ -474,11 +485,18 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
 
             OutlinedButton({ forms.add(PurchaseLineFormV3()) }, Modifier.fillMaxWidth()) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("Add another item") }
 
+            HorizontalDivider()
+            Text("Order delivery", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            DecimalFieldV3("Delivery charge (gross £)", deliveryCharge, Modifier.fillMaxWidth()) { deliveryCharge = it }
+            Text("Defaults to £0.00. Uses the purchase VAT treatment selected above; included in purchase totals and VAT reports, never in stock or IMEI quantities.", style = MaterialTheme.typography.bodySmall)
+            if (!deliveryValid) Text("Enter a valid delivery charge of £0.00 or more.", color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            if ((deliveryPence ?: 0L) > 0) Text("Delivery net ${formatMoney(deliveryBreakdown.netPence)} • VAT ${formatMoney(deliveryBreakdown.vatPence)}", style = MaterialTheme.typography.bodySmall)
+
             ElevatedCard(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Purchase total", style = MaterialTheme.typography.labelLarge)
                     Text(formatMoney(totalBreakdown.grossPence), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text("${forms.size} item line${if (forms.size == 1) "" else "s"} • $totalQty total units")
+                    Text("${forms.size} item line${if (forms.size == 1) "" else "s"} • $totalQty total units • Delivery ${formatMoney(deliveryBreakdown.grossPence)}")
                     Text("Net ${formatMoney(totalBreakdown.netPence)} • VAT ${formatMoney(totalBreakdown.vatPence)}", style = MaterialTheme.typography.bodySmall)
                 }
             }
@@ -507,6 +525,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
                             vatType = vatType,
                             paymentMethod = payment,
                             notes = orderNotes,
+                            deliveryGrossPence = deliveryPence ?: 0L,
                             items = forms.map { form ->
                                 val quantity = form.quantity.toIntOrNull() ?: 0
                                 val unitGross = runCatching { moneyToPence(form.gross) }.getOrDefault(0)
@@ -531,7 +550,8 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
                         itemNotes = forms.map { it.notes }
                     ) { nav.popBackStack() }
                 },
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                enabled = deliveryValid
             ) { Icon(Icons.Default.Save, null); Spacer(Modifier.width(6.dp)); Text("Save purchase") }
             Spacer(Modifier.height(20.dp))
         }

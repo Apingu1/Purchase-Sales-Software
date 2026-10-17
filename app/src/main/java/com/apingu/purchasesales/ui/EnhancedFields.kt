@@ -175,28 +175,44 @@ private fun DateFormField(label: String, value: String, onValueChange: (String) 
 @Composable
 private fun SupplierHistoryField(label: String, value: String, onValueChange: (String) -> Unit) {
     val history = LocalSupplierSuggestions.current
-    var expanded by remember { mutableStateOf(false) }
+    // Suggestions are explicitly opened inline, never as an overlay when typing.
+    // This keeps focus, keyboard and the editable field stable on small screens.
+    var showHistory by remember { mutableStateOf(false) }
     val matches = remember(value, history) {
         val query = value.trim()
-        history.filter { supplier -> query.isBlank() || supplier.contains(query, ignoreCase = true) }.take(8)
+        history.filter { query.isBlank() || it.contains(query, ignoreCase = true) }.take(6)
     }
 
-    Box {
+    androidx.compose.foundation.layout.Column(Modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = value,
-            onValueChange = { onValueChange(it); expanded = true },
+            onValueChange = onValueChange,
             label = { Text(label) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             trailingIcon = {
-                IconButton(onClick = { expanded = matches.isNotEmpty() }) {
-                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Previous suppliers")
+                IconButton(onClick = { showHistory = !showHistory }, enabled = history.isNotEmpty()) {
+                    Icon(Icons.Default.KeyboardArrowDown, contentDescription = "Show previous suppliers")
                 }
             }
         )
-        DropdownMenu(expanded = expanded && matches.isNotEmpty(), onDismissRequest = { expanded = false }) {
-            matches.forEach { supplier ->
-                DropdownMenuItem(text = { Text(supplier) }, onClick = { onValueChange(supplier); expanded = false })
+        if (showHistory && history.isNotEmpty()) {
+            Text(
+                "Previous suppliers (tap one to fill)",
+                style = androidx.compose.material3.MaterialTheme.typography.labelSmall
+            )
+            if (matches.isEmpty()) {
+                Text("No matching suppliers", style = androidx.compose.material3.MaterialTheme.typography.bodySmall)
+            } else {
+                matches.forEach { supplier ->
+                    TextButton(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = {
+                            onValueChange(supplier)
+                            showHistory = false
+                        }
+                    ) { Text(supplier) }
+                }
             }
         }
     }
