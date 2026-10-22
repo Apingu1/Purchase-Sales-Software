@@ -85,7 +85,10 @@ data class PendingInventoryRow(
 
 /** Stock still expected, excluding cancellations and voided unreceived purchases. */
 private fun outstandingUnits(p: PurchaseEntity): Int =
-    if (isVoidedPurchaseForAccounting(p)) 0
+    // Unreceived stock under a full supplier refund claim is no longer expected to arrive.
+    if (isVoidedPurchaseForAccounting(p) ||
+        (p.receivedQty == 0 && p.refundExpectedPence > 0 &&
+            p.refundExpectedPence >= p.grossPence)) 0
     else (p.quantity - p.receivedQty - p.cancelledQty).coerceAtLeast(0)
 
 private fun proportionalCost(amount: Long, totalQty: Int, units: Int): Long =
