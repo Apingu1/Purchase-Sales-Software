@@ -104,7 +104,9 @@ data class ExpenseDraft(
     val vatType: String,
     val paymentMethod: String,
     val comments: String,
-    val existingAttachmentPath: String? = null
+    val existingAttachmentPath: String? = null,
+    val orderNumber: String = "",
+    val accountUsername: String = ""
 )
 
 data class FullData(
@@ -146,6 +148,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     val returnAllocations = dao.observeSaleReturnAllocations()
     val creditNoteImeis = dao.observeCreditNoteImeis()
     val expenses = dao.observeExpenses()
+    val expenseInvoices = dao.observeExpenseInvoices()
+    val pendingExpenseInvoiceCandidates = dao.observePendingExpenseInvoiceCandidates()
 
     suspend fun ensureBusinessDefaults() {
         var business = dao.getBusiness()
@@ -264,6 +268,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 it.name.replace(Regex("[^A-Za-z0-9._-]+"), "_").trim('_').take(64) == sanitized })
             blockers += "Another accounting period uses the same Dropbox folder name."
         val documents = dao.getAllPurchaseInvoices().count { it.purchaseOrderId in orderIds } +
+            dao.getAllExpenseInvoices().count { it.expenseId in affectedExpenses.map { e -> e.id } } +
             affectedSales.count { !it.pdfPath.isNullOrBlank() } +
             affectedCreditNotes.count { !it.pdfPath.isNullOrBlank() } +
             affectedExpenses.count { !it.attachmentPath.isNullOrBlank() }
@@ -284,6 +289,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val oldExpenses = dao.getExpenses().filter { it.expenseDateEpochDay in period.startEpochDay..period.endEpochDay }
         val paths = (
             dao.getAllPurchaseInvoices().filter { it.purchaseOrderId in orderIds }.map { it.filePath } +
+                dao.getAllExpenseInvoices().filter { invoice -> oldExpenses.any { it.id == invoice.expenseId } }
+                    .map { it.filePath } +
                 oldOrders.mapNotNull { it.invoicePath } +
                 oldPurchases.mapNotNull { it.invoicePath } +
                 oldSales.mapNotNull { it.pdfPath } +
@@ -366,6 +373,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             addAll(dao.getSales().mapNotNull { it.pdfPath })
             addAll(dao.getCreditNotes().mapNotNull { it.pdfPath })
             addAll(dao.getExpenses().mapNotNull { it.attachmentPath })
+            addAll(dao.getAllExpenseInvoices().map { it.filePath })
         }
         paths.filterNot { it in remainingPaths }.forEach { File(it).delete() }
         DropboxDeletionQueue.enqueuePeriod(context, period.name)
@@ -880,18 +888,152 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     suspend fun saveExpense(draft: ExpenseDraft, attachmentUri: Uri? = null): Long {
         require(draft.supplier.isNotBlank()) { "Store/supplier is required" }
         require(draft.details.isNotBlank()) { "Expense details are required" }
+        require(draft.grossPence >= 0) { "Expense amount cannot be negative" }
         val vat = breakdownFromGross(draft.grossPence, draft.vatType)
-        val path = attachmentUri?.let { DocumentStore.copyIntoApp(context, it, "EXP_${draft.id.takeIf { n -> n > 0 } ?: "NEW"}") } ?: draft.existingAttachmentPath
+        val old = if (draft.id > 0) dao.getExpense(draft.id) else null
         val value = ExpenseEntity(
             id = draft.id, expenseDateEpochDay = draft.dateEpochDay, supplier = draft.supplier.trim(),
             details = draft.details.trim(), account = draft.account.trim(), grossPence = vat.grossPence,
             netPence = vat.netPence, vatPence = vat.vatPence, reverseVatPence = vat.reverseVatPence,
-            vatType = draft.vatType, paymentMethod = draft.paymentMethod.trim(), attachmentPath = path,
-            comments = draft.comments.trim(), updatedAtMillis = System.currentTimeMillis()
+            vatType = draft.vatType, paymentMethod = draft.paymentMethod.trim(),
+            attachmentPath = old?.attachmentPath ?: draft.existingAttachmentPath,
+            comments = draft.comments.trim(), updatedAtMillis = System.currentTimeMillis(),
+            orderNumber = draft.orderNumber.trim(), accountUsername = draft.accountUsername.trim(),
+            invoiceWaived = old?.invoiceWaived ?: false
         )
-        val id = if (draft.id == 0L) dao.insertExpense(value) else { dao.updateExpense(value); draft.id }
+        val id = if (draft.id == 0L) dao.insertExpense(value) else {
+            dao.updateExpense(value); draft.id
+        }
+        if (attachmentUri != null) attachAdditionalExpenseInvoice(id, attachmentUri)
         enqueueSync()
         return id
+    }
+
+    suspend fun attachAdditionalExpenseInvoice(expenseId: Long, uri: Uri): Long {
+        requireNotNull(dao.getExpense(expenseId)) { "Expense not found" }
+        val path = DocumentStore.copyIntoApp(context, uri, "EXP_INV_${expenseId}_${java.util.UUID.randomUUID()}")
+        try {
+            val fingerprint = PurchaseInvoiceFiles.fingerprint(path)
+            val id = db.withTransaction {
+                val expense = dao.getExpense(expenseId) ?: error("Expense not found")
+                require(dao.getExpenseInvoices(expenseId).none {
+                    it.sha256 == fingerprint.sha256 ||
+                        (it.sha256.isBlank() &&
+                            runCatching { PurchaseInvoiceFiles.fingerprint(it.filePath).sha256 }
+                                .getOrDefault("") == fingerprint.sha256)
+                }) { "This invoice is already attached to the expense" }
+                val id = dao.insertExpenseInvoice(ExpenseInvoiceEntity(
+                    expenseId = expenseId,
+                    invoiceOrdinal = dao.nextExpenseInvoiceOrdinal(expenseId),
+                    filePath = path,
+                    originalFileName = PurchaseInvoiceFiles.originalName(context, uri),
+                    sha256 = fingerprint.sha256, byteSize = fingerprint.byteSize
+                ))
+                if (expense.invoiceWaived) dao.updateExpense(expense.copy(invoiceWaived = false))
+                id
+            }
+            enqueueSync()
+            return id
+        } catch (error: Exception) {
+            File(path).delete()
+            throw error
+        }
+    }
+
+    suspend fun removeExpenseInvoice(invoiceId: Long) {
+        val doc = dao.getExpenseInvoice(invoiceId) ?: error("Expense invoice not found")
+        val expense = dao.getExpense(doc.expenseId) ?: error("Expense not found")
+        db.withTransaction {
+            dao.deleteExpenseInvoice(doc)
+            if (expense.attachmentPath == doc.filePath)
+                dao.updateExpense(expense.copy(attachmentPath = null))
+        }
+        if (dao.getAllExpenseInvoices().none { it.filePath == doc.filePath } &&
+            dao.getExpenses().none { it.attachmentPath == doc.filePath }) File(doc.filePath).delete()
+        DropboxDeletionQueue.enqueueExpense(context, expense.expenseDateEpochDay,
+            "EXP_${expense.id}_${doc.invoiceOrdinal}." +
+                File(doc.filePath).extension.ifBlank { "pdf" })
+        enqueueSync()
+    }
+
+    suspend fun setExpenseInvoiceWaived(expenseId: Long, waived: Boolean) {
+        val expense = dao.getExpense(expenseId) ?: error("Expense not found")
+        if (waived) require(dao.getExpenseInvoices(expenseId).isEmpty()) {
+            "This expense already has an approved invoice"
+        }
+        dao.updateExpense(expense.copy(invoiceWaived = waived))
+        enqueueSync()
+    }
+
+    suspend fun rejectExpenseInvoiceCandidate(candidateId: Long) {
+        val candidate = dao.getExpenseInvoiceCandidate(candidateId) ?: error("Candidate not found")
+        require(candidate.status == "PENDING_REVIEW") { "Candidate already reviewed" }
+        dao.updateExpenseInvoiceCandidate(candidate.copy(status = "REJECTED",
+            reviewedAtMillis = System.currentTimeMillis()))
+        InvoiceCandidateCache.discard(context, -candidateId)
+    }
+
+    suspend fun approveExpenseInvoiceCandidate(candidateId: Long) {
+        val candidate = dao.getExpenseInvoiceCandidate(candidateId) ?: error("Candidate not found")
+        require(candidate.status == "PENDING_REVIEW") { "Candidate already reviewed" }
+        val expense = dao.getExpense(candidate.expenseId) ?: error("Expense not found")
+        require(expense.orderNumber.isNotBlank() &&
+            expense.accountUsername.equals(candidate.accountEmail, true)) {
+            "Expense reference or matching mailbox has changed"
+        }
+        val preview = InvoiceCandidateCache.previewFile(context, -candidateId)
+            ?: error("Preview not available")
+        val folder = File(context.filesDir, "documents").apply { mkdirs() }
+        val destination = File(folder, "EXP_EMAIL_INV_${expense.id}_${java.util.UUID.randomUUID()}.${preview.extension}")
+        try {
+            preview.copyTo(destination)
+            val fingerprint = PurchaseInvoiceFiles.fingerprint(destination.absolutePath)
+            db.withTransaction {
+                val current = dao.getExpenseInvoiceCandidate(candidateId)
+                    ?: error("Candidate not found")
+                require(current.status == "PENDING_REVIEW") { "Candidate already reviewed" }
+                val existing = dao.getExpenseInvoices(expense.id)
+                require(existing.none { it.sha256 == fingerprint.sha256 }) {
+                    "This invoice is already attached to this expense"
+                }
+                dao.insertExpenseInvoice(ExpenseInvoiceEntity(
+                    expenseId = expense.id, invoiceOrdinal = dao.nextExpenseInvoiceOrdinal(expense.id),
+                    filePath = destination.absolutePath,
+                    originalFileName = current.originalFileName,
+                    source = "EMAIL", sourceAccountEmail = current.accountEmail,
+                    sourceMessageId = current.messageId,
+                    sha256 = fingerprint.sha256, byteSize = fingerprint.byteSize
+                ))
+                dao.updateExpenseInvoiceCandidate(current.copy(status = "APPROVED",
+                    reviewedAtMillis = System.currentTimeMillis()))
+                dao.getExpense(expense.id)?.let { currentExpense ->
+                    if (currentExpense.invoiceWaived)
+                        dao.updateExpense(currentExpense.copy(invoiceWaived = false))
+                }
+            }
+            InvoiceCandidateCache.discard(context, -candidateId)
+            enqueueSync()
+        } catch (ex: Exception) {
+            destination.delete()
+            throw ex
+        }
+    }
+
+    suspend fun deleteExpense(expenseId: Long) {
+        val expense = dao.getExpense(expenseId) ?: error("Expense not found")
+        val docs = dao.getExpenseInvoices(expenseId)
+        dao.deleteExpense(expense)
+        (docs.map { it.filePath } + listOfNotNull(expense.attachmentPath)).distinct()
+            .filter { path ->
+                dao.getAllExpenseInvoices().none { it.filePath == path } &&
+                    dao.getExpenses().none { it.attachmentPath == path }
+            }.forEach { File(it).delete() }
+        docs.forEach { doc ->
+            DropboxDeletionQueue.enqueueExpense(context, expense.expenseDateEpochDay,
+                "EXP_${expense.id}_${doc.invoiceOrdinal}." +
+                    File(doc.filePath).extension.ifBlank { "pdf" })
+        }
+        enqueueSync()
     }
 
     suspend fun saveSale(draft: SaleDraft): Long {
