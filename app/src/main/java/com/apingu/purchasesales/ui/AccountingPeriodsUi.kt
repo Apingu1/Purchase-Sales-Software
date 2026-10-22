@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.apingu.purchasesales.data.AccountingPeriodEntity
+import com.apingu.purchasesales.data.AccountingPeriodDeletionImpact
 import com.apingu.purchasesales.util.displayDate
 import com.apingu.purchasesales.util.editDate
 import com.apingu.purchasesales.util.epochDayToday
