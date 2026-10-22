@@ -60,7 +60,7 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
     val linesByOrder = purchaseLines.groupBy { it.purchaseOrderId }
     val eligible = orders.filter { order ->
         val lines = linesByOrder[order.id].orEmpty()
-        lines.isNotEmpty() && !lines.all(::isFullyCancelledPurchase)
+        lines.isNotEmpty() && !isCancelledOrderForInvoiceFinder(lines)
     }
     val orderMap = eligible.associateBy { it.id }
     val suggestionsForEligible = suggestions.filter { orderMap.containsKey(it.purchaseOrderId) }

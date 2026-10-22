@@ -146,7 +146,8 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
                     allocations,
                     returns,
                     returnAllocations,
-                    expenses
+                    expenses,
+                    orders
                 )
 
                 val xlsx = File(exportDir, "Business_Records_${safePeriod(period)}.xlsx")
@@ -159,7 +160,8 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
                     periodCreditNotes,
                     customers,
                     periodExpenses,
-                    summary
+                    summary,
+                    orders.filter { it.purchaseDateEpochDay in period.startEpochDay..period.endEpochDay }
                 )
                 DropboxApi.upload(token, "$periodRoot/Excel/${xlsx.name}", xlsx.readBytes())
 

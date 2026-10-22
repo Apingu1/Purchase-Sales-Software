@@ -449,7 +449,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 updatedAtMillis = now,
                 invoiceSequence = sequence,
                 invoiceSupplierKey = supplierKey,
-                deliveryGrossPence = draft.deliveryGrossPence
+                deliveryGrossPence = draft.deliveryGrossPence,
+                invoiceWaived = if (copiedInvoice != null) false else existingOrder?.invoiceWaived ?: false
             )
             val savedOrderId = if (existingOrder == null) dao.insertPurchaseOrder(header) else {
                 dao.updatePurchaseOrder(header)
@@ -658,6 +659,9 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val candidate = dao.getInvoiceCandidate(candidateId) ?: error("Candidate not found")
         require(candidate.status == "PENDING_REVIEW") { "Candidate already reviewed" }
         val order = dao.getPurchaseOrder(candidate.purchaseOrderId) ?: error("Purchase order not found")
+        require(!isCancelledOrderForInvoiceFinder(dao.getPurchasesForOrder(order.id))) {
+            "Cancelled purchases are excluded from Invoice Finder"
+        }
         require(order.orderNumber.isNotBlank()) { "The purchase order number is missing" }
         require(order.accountUsername.trim().equals(candidate.accountEmail.trim(), ignoreCase = true)) {
             "Candidate belongs to a different purchasing mailbox"
@@ -675,7 +679,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 require(current.status == "PENDING_REVIEW") { "Candidate already reviewed" }
                 val currentOrder = dao.getPurchaseOrder(current.purchaseOrderId)
                     ?: error("Purchase order not found")
-                require(currentOrder.orderNumber.isNotBlank() &&
+                require(!isCancelledOrderForInvoiceFinder(dao.getPurchasesForOrder(currentOrder.id)) &&
+                    currentOrder.orderNumber.isNotBlank() &&
                     currentOrder.accountUsername.trim().equals(current.accountEmail.trim(), ignoreCase = true)) {
                     "Purchase order or source mailbox has changed"
                 }

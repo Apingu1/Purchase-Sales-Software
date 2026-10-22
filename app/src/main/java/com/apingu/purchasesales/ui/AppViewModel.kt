@@ -614,7 +614,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
 
     fun exportDocuments(treeUri: Uri) = action("Documents exported") {
         val d = repo.getFullData()
-        val count = DocumentStore.exportAllDocuments(context, treeUri, d.purchases, d.sales, d.creditNotes, d.expenses, dao.getAllPurchaseInvoices(), dao.getPurchaseOrders())
+        val count = DocumentStore.exportAllDocuments(context, treeUri, d.purchases, d.sales, d.creditNotes, d.expenses, dao.getAllPurchaseInvoices(), dao.getPurchaseOrders(), dao.getAllExpenseInvoices())
         _message.value = "$count documents exported"
     }
 
