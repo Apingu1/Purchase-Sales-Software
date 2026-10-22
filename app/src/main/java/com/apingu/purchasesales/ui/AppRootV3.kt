@@ -676,30 +676,76 @@ private fun DecimalFieldV3(label: String, value: String, modifier: Modifier, onV
 @Composable
 private fun InventoryScreenV3(vm: AppViewModel) {
     val inv by vm.inventory.collectAsStateWithLifecycle()
+    val pending by vm.pendingInventory.collectAsStateWithLifecycle()
+    var tab by remember { mutableIntStateOf(0) }
+    val available = inv.filter { it.available > 0 }
     ScreenScaffold("Inventory") { inner ->
-        val available = inv.filter { it.available > 0 }
-        if (available.isEmpty()) Box(Modifier.padding(inner).fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState("Received purchase items will appear here") }
-        else LazyColumn(
-            Modifier.padding(inner),
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            item {
-                Text(
-                    "Identical item names are automatically consolidated. Ten individually purchased units of the same item appear as one inventory item with Qty 10.",
-                    style = MaterialTheme.typography.bodySmall
-                )
+        Column(Modifier.padding(inner).fillMaxSize()) {
+            TabRow(selectedTabIndex = tab) {
+                Tab(tab == 0, { tab = 0 }, text = { Text("In Stock") })
+                Tab(tab == 1, { tab = 1 }, text = { Text("Pending Receipt") })
             }
-            items(available, key = { it.item.lowercase() }) { row ->
-                ElevatedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(row.item, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                            AssistChip(onClick = {}, label = { Text("Qty ${row.available}") })
+            if (tab == 0) {
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    item {
+                        ElevatedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text("Inventory purchase cost · " + available.sumOf { it.available } + " units",
+                                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Text("Gross purchase value  " + formatMoney(available.sumOf { it.inventoryGrossCostPence }),
+                                    style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text("Net purchase value  " + formatMoney(available.sumOf { it.inventoryNetCostPence }),
+                                    style = MaterialTheme.typography.bodyMedium)
+                            }
                         }
-                        Spacer(Modifier.height(6.dp))
-                        Text("Purchased ${row.purchased} • Received ${row.received} • Sold ${row.sold} • Supplier returns ${row.supplierReturned}", style = MaterialTheme.typography.bodySmall)
-                        Text("Inventory net cost ${formatMoney(row.inventoryNetCostPence)}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (available.isEmpty()) item { EmptyState("No available inventory") }
+                    items(available, key = { it.item.lowercase() }) { row ->
+                        ElevatedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(row.item, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                    Text("Qty " + row.available, fontWeight = FontWeight.Medium)
+                                }
+                                Text("Gross cost  " + formatMoney(row.inventoryGrossCostPence) +
+                                    "  •  Net cost  " + formatMoney(row.inventoryNetCostPence),
+                                    style = MaterialTheme.typography.bodyMedium)
+                                Text("Purchased " + row.purchased + " • Received " + row.received +
+                                    " • Sold " + row.sold + " • Supplier returns " + row.supplierReturned,
+                                    style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    item {
+                        ElevatedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text("Pending inventory · " + pending.sumOf { it.quantity } + " units",
+                                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Text("Gross purchase value  " + formatMoney(pending.sumOf { it.grossCostPence }),
+                                    style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text("Net purchase value  " + formatMoney(pending.sumOf { it.netCostPence }),
+                                    style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                    if (pending.isEmpty()) item { EmptyState("No stock awaiting receipt") }
+                    items(pending, key = { it.item.lowercase() }) { row ->
+                        ElevatedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(row.item, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                    Text("Pending " + row.quantity, fontWeight = FontWeight.Medium)
+                                }
+                                Text("Gross cost  " + formatMoney(row.grossCostPence) +
+                                    "  •  Net cost  " + formatMoney(row.netCostPence),
+                                    style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
                     }
                 }
             }

@@ -145,6 +145,8 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
 
     val inventory = combine(purchases, allocations, returnAllocations) { p, a, r -> buildInventory(p, a, r) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val pendingInventory = purchases.map(::buildPendingInventory)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private data class FinancePart(
         val p: List<PurchaseEntity>, val s: List<SaleEntity>, val l: List<SaleLineEntity>,

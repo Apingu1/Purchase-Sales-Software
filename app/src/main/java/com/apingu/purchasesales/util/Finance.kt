@@ -72,7 +72,42 @@ fun effectivePurchaseNetPence(purchase: PurchaseEntity): Long =
 fun supplierRefundGrossPence(purchase: PurchaseEntity): Long =
     if (purchase.partialRefund) purchase.refundNetPence + purchase.refundVatPence else purchase.refundExpectedPence
 
-data class InventoryRow(val item: String, val purchased: Int, val received: Int, val supplierReturned: Int, val sold: Int, val customerRestocked: Int, val available: Int, val inventoryNetCostPence: Long)
+data class InventoryRow(
+    val item: String, val purchased: Int, val received: Int, val supplierReturned: Int,
+    val sold: Int, val customerRestocked: Int, val available: Int,
+    val inventoryNetCostPence: Long, val inventoryGrossCostPence: Long = 0
+)
+
+data class PendingInventoryRow(
+    val item: String, val quantity: Int,
+    val netCostPence: Long, val grossCostPence: Long
+)
+
+/** Stock still expected, excluding cancellations and voided unreceived purchases. */
+private fun outstandingUnits(p: PurchaseEntity): Int =
+    if (isVoidedPurchaseForAccounting(p)) 0
+    else (p.quantity - p.receivedQty - p.cancelledQty).coerceAtLeast(0)
+
+private fun proportionalCost(amount: Long, totalQty: Int, units: Int): Long =
+    if (totalQty <= 0 || units <= 0) 0 else
+        java.math.BigDecimal.valueOf(amount.coerceAtLeast(0))
+            .multiply(java.math.BigDecimal.valueOf(units.toLong()))
+            .divide(java.math.BigDecimal.valueOf(totalQty.toLong()), 0, RoundingMode.HALF_UP)
+            .longValueExact()
+
+fun buildPendingInventory(purchases: List<PurchaseEntity>): List<PendingInventoryRow> =
+    purchases.groupBy { it.item.trim().lowercase() }.mapNotNull { (_, lines) ->
+        val quantity = lines.sumOf(::outstandingUnits)
+        if (quantity <= 0) null else PendingInventoryRow(
+            lines.first().item, quantity,
+            lines.sumOf { p -> proportionalCost(effectivePurchaseNetPence(p), p.quantity, outstandingUnits(p)) },
+            lines.sumOf { p ->
+                val effectiveGross = p.grossPence -
+                    if (p.partialRefund) p.refundNetPence + p.refundVatPence else 0L
+                proportionalCost(effectiveGross, p.quantity, outstandingUnits(p))
+            }
+        )
+    }.sortedBy { it.item.lowercase() }
 
 data class FinanceSummary(
     val salesNet: Long = 0,
@@ -112,11 +147,18 @@ fun buildInventory(
         val restored = ps.sumOf { restoredByPurchase[it.id] ?: 0 }
         val available = received - supplierReturned - sold + restored
         val value = ps.sumOf { p ->
-            val pAvail = p.receivedQty - p.returnedQty - (soldByPurchase[p.id] ?: 0) + (restoredByPurchase[p.id] ?: 0)
-            val unitNet = if (p.quantity > 0) effectivePurchaseNetPence(p) / p.quantity else 0
-            pAvail.coerceAtLeast(0) * unitNet
+            val pAvail = (p.receivedQty - p.returnedQty - (soldByPurchase[p.id] ?: 0) +
+                (restoredByPurchase[p.id] ?: 0)).coerceAtLeast(0)
+            proportionalCost(effectivePurchaseNetPence(p), p.quantity, pAvail)
         }
-        InventoryRow(name, purchased, received, supplierReturned, sold, restored, available, value)
+        val gross = ps.sumOf { p ->
+            val pAvail = (p.receivedQty - p.returnedQty - (soldByPurchase[p.id] ?: 0) +
+                (restoredByPurchase[p.id] ?: 0)).coerceAtLeast(0)
+            val effectiveGross = p.grossPence -
+                if (p.partialRefund) p.refundNetPence + p.refundVatPence else 0L
+            proportionalCost(effectiveGross, p.quantity, pAvail)
+        }
+        InventoryRow(name, purchased, received, supplierReturned, sold, restored, available, value, gross)
     }.sortedBy { it.item.lowercase() }
 }
 

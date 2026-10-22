@@ -324,15 +324,19 @@ private sealed interface PreviewResult {
     data class Failed(val message: String) : PreviewResult
 }
 
-/** On-device PDF/image preview. No external viewer or explicit file download required. */
+/** Continuous, lazily rendered PDF pages shared by sales, purchases and expenses. */
 @Composable
 fun InvoiceFilePreview(path: String, name: String, onClose: () -> Unit) {
-    var page by remember(path) { mutableIntStateOf(0) }
-    val result by produceState<PreviewResult>(PreviewResult.Loading, path, page) {
-        value = PreviewResult.Loading
+    val pageCount by produceState<Int?>(null, path) {
         value = withContext(Dispatchers.IO) {
-            runCatching { renderInvoicePage(File(path), page) }
-                .getOrElse { PreviewResult.Failed(it.message ?: "Unable to open this invoice") }
+            runCatching {
+                val file = File(path)
+                require(file.isFile) { "Invoice file is missing from this device" }
+                if (!file.extension.equals("pdf", true)) 1
+                else ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+                    PdfRenderer(fd).use { it.pageCount }
+                }
+            }.getOrDefault(-1)
         }
     }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -343,25 +347,36 @@ fun InvoiceFilePreview(path: String, name: String, onClose: () -> Unit) {
                     IconButton(onClose) { Icon(Icons.Default.Close, "Close preview") }
                 }
                 HorizontalDivider()
-                when (val state = result) {
-                    PreviewResult.Loading -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
+                when (val count = pageCount) {
+                    null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    -1, 0 -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Unable to open this invoice on this device")
                     }
-                    is PreviewResult.Failed -> Box(Modifier.weight(1f).fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                        Text(state.message)
-                    }
-                    is PreviewResult.Ready -> {
-                        Image(state.bitmap.asImageBitmap(), contentDescription = "Invoice page " + (page + 1),
-                            modifier = Modifier.fillMaxWidth().weight(1f).padding(8.dp),
-                            contentScale = ContentScale.Fit)
-                        if (state.pages > 1) Row(
-                            Modifier.fillMaxWidth().padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedButton({ page-- }, enabled = page > 0) { Text("Previous") }
-                            Text((page + 1).toString() + " / " + state.pages)
-                            OutlinedButton({ page++ }, enabled = page < state.pages - 1) { Text("Next") }
+                    else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(count) { page ->
+                            val result by produceState<PreviewResult>(PreviewResult.Loading, path, page) {
+                                value = withContext(Dispatchers.IO) {
+                                    runCatching { renderInvoicePage(File(path), page) }
+                                        .getOrElse { PreviewResult.Failed(it.message ?: "Unable to open page") }
+                                }
+                            }
+                            when (val state = result) {
+                                PreviewResult.Loading -> Box(Modifier.fillMaxWidth().height(160.dp),
+                                    contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                                is PreviewResult.Failed -> Text(state.message, Modifier.padding(16.dp))
+                                is PreviewResult.Ready -> {
+                                    Column {
+                                        if (count > 1) Text("Page " + (page + 1) + " of " + count,
+                                            style = MaterialTheme.typography.labelSmall)
+                                        Image(state.bitmap.asImageBitmap(),
+                                            contentDescription = "Invoice page " + (page + 1),
+                                            modifier = Modifier.fillMaxWidth().aspectRatio(
+                                                state.bitmap.width.toFloat() / state.bitmap.height.toFloat()),
+                                            contentScale = ContentScale.Fit)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
