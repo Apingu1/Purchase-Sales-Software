@@ -28,6 +28,27 @@ object DropboxDeletionQueue {
     private const val KEY_PURCHASES = "purchase_invoice_deletions"
     private const val KEY_CREDIT_NOTES = "credit_note_deletions"
     private const val KEY_PERIODS = "accounting_period_deletions"
+    private const val KEY_EXPENSES = "expense_invoice_deletions"
+
+    @Synchronized
+    fun enqueueExpense(context: Context, date: Long, fileName: String) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val values = prefs.getStringSet(KEY_EXPENSES, emptySet()).orEmpty().toMutableSet()
+        values += date.toString() + "\t" + fileName
+        prefs.edit().putStringSet(KEY_EXPENSES, values).apply()
+    }
+
+    fun pendingExpenses(context: Context): Set<String> =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getStringSet(KEY_EXPENSES, emptySet()).orEmpty().toSet()
+
+    @Synchronized
+    fun removeExpenses(context: Context, completed: Set<String>) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val values = prefs.getStringSet(KEY_EXPENSES, emptySet()).orEmpty().toMutableSet()
+        values.removeAll(completed)
+        prefs.edit().putStringSet(KEY_EXPENSES, values).apply()
+    }
 
     @Synchronized
     fun enqueuePeriod(context: Context, periodName: String) {

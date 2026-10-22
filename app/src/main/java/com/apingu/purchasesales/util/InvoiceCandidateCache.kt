@@ -21,14 +21,14 @@ object InvoiceCandidateCache {
     )
 
     fun previewFile(context: Context, candidateId: Long): File? {
-        if (candidateId <= 0) return null
+        if (candidateId == 0L) return null
         val root = directory(context)
         return types.values.distinct().map { File(root, candidateId.toString() + "." + it) }
             .firstOrNull { it.isFile && it.length() > 0 }
     }
 
     fun stage(context: Context, candidateId: Long, mimeType: String, stream: InputStream): File {
-        require(candidateId > 0) { "Candidate ID must be positive" }
+        require(candidateId != 0L) { "Candidate ID must not be zero" }
         val extension = types[mimeType.lowercase()]
             ?: error("Only PDF and JPEG/PNG invoice previews are supported")
         val root = directory(context)
@@ -61,7 +61,7 @@ object InvoiceCandidateCache {
     }
 
     fun discard(context: Context, candidateId: Long) {
-        if (candidateId <= 0) return
+        if (candidateId == 0L) return
         types.values.distinct().forEach {
             File(directory(context), candidateId.toString() + "." + it).delete()
         }

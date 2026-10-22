@@ -137,6 +137,9 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     val returnAllocations = repo.returnAllocations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val creditNoteImeis = repo.creditNoteImeis.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val expenses = repo.expenses.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val expenseInvoices = repo.expenseInvoices.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val pendingExpenseInvoiceCandidates = repo.pendingExpenseInvoiceCandidates
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val selectedAccountingPeriod = combine(business, accountingPeriods) { b, periods ->
         periods.firstOrNull { it.id == b.selectedAccountingPeriodId }
@@ -557,7 +560,36 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     }
 
     fun recordReturn(lineId: Long, day: Long, qty: Int, restock: Boolean, notes: String, onSuccess: () -> Unit = {}) = action("Customer return recorded", onSuccess) { repo.recordCustomerReturn(lineId, day, qty, restock, notes) }
-    fun saveExpense(value: ExpenseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) = action("Expense saved", onSuccess) { repo.saveExpense(value, attachmentUri) }
+    fun saveExpense(value: ExpenseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) =
+        action("Expense saved", onSuccess) { repo.saveExpense(value, attachmentUri) }
+
+    fun saveExpenseWithInvoices(value: ExpenseDraft, attachments: List<Uri>, onSuccess: () -> Unit) =
+        action("Expense and invoices saved", onSuccess) {
+            val expenseId = repo.saveExpense(value)
+            attachments.forEach { repo.attachAdditionalExpenseInvoice(expenseId, it) }
+        }
+
+    fun addExpenseInvoices(expenseId: Long, attachments: List<Uri>) =
+        action("Expense invoice(s) attached") {
+            attachments.forEach { repo.attachAdditionalExpenseInvoice(expenseId, it) }
+        }
+
+    fun deleteExpenseInvoice(invoiceId: Long) =
+        action("Expense invoice removed") { repo.removeExpenseInvoice(invoiceId) }
+
+    fun waiveExpenseInvoice(expenseId: Long, waived: Boolean) =
+        action(if (waived) "Expense invoice waived" else "Waiver removed") {
+            repo.setExpenseInvoiceWaived(expenseId, waived)
+        }
+
+    fun approveExpenseInvoice(candidateId: Long) =
+        action("Expense invoice approved") { repo.approveExpenseInvoiceCandidate(candidateId) }
+
+    fun rejectExpenseInvoice(candidateId: Long) =
+        action("Expense invoice suggestion rejected") { repo.rejectExpenseInvoiceCandidate(candidateId) }
+
+    fun deleteExpense(expenseId: Long, onSuccess: () -> Unit = {}) =
+        action("Expense deleted", onSuccess) { repo.deleteExpense(expenseId) }
     fun syncNow() = action("Dropbox sync queued") { repo.enqueueSync() }
 
     fun exportExcel(uri: Uri) = action("Excel workbook exported") {
