@@ -63,7 +63,9 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
         lines.isNotEmpty() && !isCancelledOrderForInvoiceFinder(lines)
     }
     val orderMap = eligible.associateBy { it.id }
-    val suggestionsForEligible = suggestions.filter { orderMap.containsKey(it.purchaseOrderId) }
+    val suggestionsForEligible = suggestions.filter {
+        orderMap.containsKey(it.purchaseOrderId) && grouped[it.purchaseOrderId].isNullOrEmpty()
+    }
     val awaiting = suggestionsForEligible.map { it.purchaseOrderId }.toSet()
     val approved = eligible.filter { !grouped[it.id].isNullOrEmpty() }
     val waived = eligible.filter { grouped[it.id].isNullOrEmpty() && it.invoiceWaived && it.id !in awaiting }
