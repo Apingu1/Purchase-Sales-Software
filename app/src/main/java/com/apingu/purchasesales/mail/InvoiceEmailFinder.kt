@@ -137,6 +137,97 @@ class InvoiceEmailFinder(private val context: Context, private val db: AppDataba
                     " (" + mailbox.emailAddress + "): " + (ex.message ?: "search error")
             }
         }
+
+        // Expense invoices use the same exact-mailbox/order-reference search and approval policy.
+        val expenseDocs = dao.getAllExpenseInvoices()
+        dao.getExpenses().filter { expense -> expenseDocs.none { it.expenseId == expense.id } }
+            .forEach { expense ->
+                val reference = expense.orderNumber.trim()
+                val email = expense.accountUsername.trim()
+                val mailbox = accounts.firstOrNull {
+                    it.emailAddress.equals(email, true) && it.isEnabled &&
+                        it.connectionState == "CONNECTED"
+                }
+                if (reference.isBlank() || mailbox == null) {
+                    skipped++; return@forEach
+                }
+                try {
+                    val key = mailbox.emailAddress.lowercase(java.util.Locale.ROOT)
+                    if (activeImapAccount != key) {
+                        imapSessions.values.forEach { runCatching { it.close() } }
+                        imapSessions.clear()
+                        activeImapAccount = key
+                    }
+                    val imap = if (mailbox.provider == "GMAIL_IMAP") {
+                        imapSessions.getOrPut(key) {
+                            GmailImapSession(mailbox.emailAddress,
+                                GmailImapCredentials.load(context, mailbox.emailAddress))
+                        }
+                    } else null
+                    val token = if (imap != null) "" else tokens[mailbox.emailAddress] ?: when (mailbox.provider) {
+                        "GMAIL" -> {
+                            val access = MailOAuth.googleSilentToken(context, mailbox.emailAddress)
+                            require(MailOAuth.verifiedGmailAddress(access).equals(email, true)) {
+                                "Gmail returned a different expense account"
+                            }
+                            access
+                        }
+                        "MICROSOFT" -> MailOAuth.microsoftToken(context, mailbox.emailAddress)
+                        else -> error("Unsupported mailbox provider " + mailbox.provider)
+                    }.also { tokens[mailbox.emailAddress] = it }
+                    searched++
+                    val results = when (mailbox.provider) {
+                        "GMAIL" -> gmailCandidates(token, reference)
+                        "MICROSOFT" -> microsoftCandidates(token, reference)
+                        "GMAIL_IMAP" -> requireNotNull(imap).search(reference)
+                        else -> emptyList()
+                    }
+                    results.take(30).forEach { match ->
+                        val id = db.withTransaction {
+                            val current = dao.getExpense(expense.id) ?: return@withTransaction 0L
+                            if (current.orderNumber.trim() != reference ||
+                                !current.accountUsername.trim().equals(email, true) ||
+                                dao.getExpenseInvoices(current.id).isNotEmpty()) return@withTransaction 0L
+                            val inserted = dao.insertExpenseInvoiceCandidate(
+                                ExpenseInvoiceCandidateEntity(
+                                    expenseId = current.id, accountEmail = mailbox.emailAddress,
+                                    messageId = match.messageId, attachmentId = match.attachmentId,
+                                    originalFileName = match.fileName, mimeType = match.mimeType
+                                )
+                            )
+                            if (inserted > 0) inserted else
+                                dao.findExpenseInvoiceCandidate(current.id, mailbox.emailAddress,
+                                    match.messageId, match.attachmentId)
+                                    ?.takeIf { it.status == "PENDING_REVIEW" }?.id ?: 0L
+                        }
+                        if (id <= 0) return@forEach
+                        if (InvoiceCandidateCache.previewFile(context, -id) == null) {
+                            if (imap != null) {
+                                // The shared cache isolates expense candidates with negative IDs.
+                                val bytes = imap.fetchAttachment(match)
+                                InvoiceCandidateCache.stage(context, -id, match.mimeType,
+                                    ByteArrayInputStream(bytes))
+                            } else {
+                                val content = when (mailbox.provider) {
+                                    "GMAIL" -> gmailAttachment(token, match)
+                                    "MICROSOFT" -> microsoftAttachment(token, match)
+                                    else -> error("Unsupported provider")
+                                }
+                                require(content.isNotEmpty() && content.size <= 25 * 1024 * 1024) {
+                                    "Expense invoice exceeds 25 MB or is empty"
+                                }
+                                InvoiceCandidateCache.stage(context, -id, match.mimeType,
+                                    ByteArrayInputStream(content))
+                            }
+                            found++
+                        }
+                    }
+                    dao.updateEmailAccount(mailbox.copy(lastCheckedAtMillis = System.currentTimeMillis()))
+                } catch (error: Exception) {
+                    errors += "Expense " + expense.supplier.take(32) + " / " + reference.take(24) +
+                        ": " + (error.message ?: "search error")
+                }
+            }
         } finally {
             imapSessions.values.forEach { runCatching { it.close() } }
         }
