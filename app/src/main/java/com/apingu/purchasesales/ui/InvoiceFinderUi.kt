@@ -83,7 +83,10 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
         Column(Modifier.padding(insets).fillMaxSize()) {
             ElevatedCard(Modifier.fillMaxWidth().padding(12.dp)) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Purchase invoice centre", fontWeight = FontWeight.SemiBold)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Purchase invoice centre", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                        TextButton({ nav.navigate("invoice-finder/expenses") }) { Text("Expenses") }
+                    }
                     Text(suggestionsForEligible.size.toString() + " pending  •  " + approved.size +
                             " approved  •  " + missing.size + " missing  •  " + waived.size + " waived",
                         style = MaterialTheme.typography.bodySmall)

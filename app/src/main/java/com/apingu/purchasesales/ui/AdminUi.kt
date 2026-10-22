@@ -55,9 +55,75 @@ private fun CustomerDialog(existing: CustomerEntity?, onDismiss: () -> Unit, onS
 @Composable
 fun ExpensesScreen(vm: AppViewModel, nav: NavHostController) {
     val expenses by vm.expenses.collectAsStateWithLifecycle()
-    Scaffold(topBar = { TopAppBar(title = { Text("Expenses") }, navigationIcon = { IconButton({ nav.popBackStack() }) { Icon(Icons.Default.ArrowBack, "Back") } }) }, floatingActionButton = { FloatingActionButton({ nav.navigate("expense/new") }) { Icon(Icons.Default.Add, null) } }) { inner ->
-        if (expenses.isEmpty()) Box(Modifier.padding(inner).fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState("No expenses recorded") }
-        else LazyColumn(Modifier.padding(inner), contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(expenses, key = { it.id }) { e -> ElevatedCard(Modifier.fillMaxWidth(), onClick = { nav.navigate("expense/${e.id}") }) { Column(Modifier.padding(14.dp)) { Row(Modifier.fillMaxWidth()) { Text(e.details, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f)); Text(formatMoney(e.grossPence), fontWeight = FontWeight.Bold) }; Text("${e.supplier} • ${displayDate(e.expenseDateEpochDay)} • ${VatTypes.label(e.vatType)}", style = MaterialTheme.typography.bodySmall) } } } }
+    val docs by vm.expenseInvoices.collectAsStateWithLifecycle()
+    val period by vm.selectedAccountingPeriod.collectAsStateWithLifecycle()
+    var query by remember { mutableStateOf("") }
+    var deleting by remember { mutableStateOf<ExpenseEntity?>(null) }
+    val visible = expenses.filter { period == null ||
+        it.expenseDateEpochDay in period!!.startEpochDay..period!!.endEpochDay }
+    val rows = visible.filter {
+        query.isBlank() || it.supplier.contains(query, true) ||
+            it.details.contains(query, true) || it.account.contains(query, true)
+    }
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("Expenses") },
+            actions = { IconButton({ nav.navigate("invoice-finder/expenses") }) {
+                Icon(Icons.Default.FindInPage, "Expense Invoice Finder")
+            } }) },
+        floatingActionButton = { FloatingActionButton({ nav.navigate("expense/new") }) {
+            Icon(Icons.Default.Add, "Add expense")
+        } },
+        contentWindowInsets = WindowInsets(0, 0, 0, 0)
+    ) { inner ->
+        LazyColumn(Modifier.padding(inner).fillMaxSize(), contentPadding = PaddingValues(12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            item {
+                ElevatedCard(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Text("Operating expenses (selected period)", fontWeight = FontWeight.SemiBold)
+                        Text("Gross  " + formatMoney(visible.sumOf { it.grossPence }),
+                            style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                        Text("Net  " + formatMoney(visible.sumOf { it.netPence }) +
+                            "  •  VAT  " + formatMoney(visible.sumOf { it.vatPence }),
+                            style = MaterialTheme.typography.bodyMedium)
+                        Text("Expense costs affect profit, not inventory quantities.",
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            item {
+                OutlinedTextField(query, { query = it }, Modifier.fillMaxWidth(),
+                    label = { Text("Search expense, supplier or category") },
+                    leadingIcon = { Icon(Icons.Default.Search, null) }, singleLine = true)
+            }
+            if (rows.isEmpty()) item { EmptyState("No expenses in this accounting period") }
+            items(rows, key = { it.id }) { expense ->
+                ElevatedCard(Modifier.fillMaxWidth(), onClick = { nav.navigate("expense/" + expense.id) }) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Text(expense.details, Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                            Text(formatMoney(expense.grossPence), fontWeight = FontWeight.Bold)
+                        }
+                        Text(expense.supplier + " • " + displayDate(expense.expenseDateEpochDay) +
+                            " • " + expense.account, style = MaterialTheme.typography.bodySmall)
+                        Text("Net " + formatMoney(expense.netPence) + " • VAT " +
+                            formatMoney(expense.vatPence) + " • " +
+                            docs.count { it.expenseId == expense.id } + " invoice(s)",
+                            style = MaterialTheme.typography.bodySmall)
+                        TextButton({ deleting = expense }) { Icon(Icons.Default.DeleteOutline, null); Text("Delete expense") }
+                    }
+                }
+            }
+        }
+    }
+    deleting?.let { expense ->
+        AlertDialog(onDismissRequest = { deleting = null },
+            title = { Text("Delete expense?") },
+            text = { Text("Deletes this expense and its linked invoices. Profit, costs and VAT recalculate.") },
+            confirmButton = { TextButton({
+                vm.deleteExpense(expense.id) { deleting = null }
+            }) { Text("Delete") } },
+            dismissButton = { TextButton({ deleting = null }) { Text("Cancel") } })
     }
 }
 
@@ -65,8 +131,10 @@ fun ExpensesScreen(vm: AppViewModel, nav: NavHostController) {
 @Composable
 fun ExpenseEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
     val expenses by vm.expenses.collectAsStateWithLifecycle()
+    val documents by vm.expenseInvoices.collectAsStateWithLifecycle()
     val e = expenses.firstOrNull { it.id == id }
     if (id > 0 && e == null) { LoadingScreen(); return }
+    val docs = documents.filter { it.expenseId == id }
     var date by remember(e?.id) { mutableStateOf(editDate(e?.expenseDateEpochDay ?: epochDayToday())) }
     var supplier by remember(e?.id) { mutableStateOf(e?.supplier.orEmpty()) }
     var details by remember(e?.id) { mutableStateOf(e?.details.orEmpty()) }
@@ -75,12 +143,72 @@ fun ExpenseEditor(vm: AppViewModel, nav: NavHostController, id: Long) {
     var vatType by remember(e?.id) { mutableStateOf(e?.vatType ?: VatTypes.STANDARD) }
     var payment by remember(e?.id) { mutableStateOf(e?.paymentMethod.orEmpty()) }
     var comments by remember(e?.id) { mutableStateOf(e?.comments.orEmpty()) }
-    var attachment by remember { mutableStateOf<Uri?>(null) }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { attachment = it }
+    var reference by remember(e?.id) { mutableStateOf(e?.orderNumber.orEmpty()) }
+    var email by remember(e?.id) { mutableStateOf(e?.accountUsername.orEmpty()) }
+    var attachments by remember { mutableStateOf<List<Uri>>(emptyList()) }
+    var preview by remember { mutableStateOf<ExpenseInvoiceEntity?>(null) }
+    var remove by remember { mutableStateOf<ExpenseInvoiceEntity?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) attachments = attachments + uris
+    }
     val b = breakdownFromGross(runCatching { moneyToPence(gross) }.getOrDefault(0), vatType)
-    ScreenScaffold(if (id == 0L) "New expense" else "Edit expense", onBack = { nav.popBackStack() }) { inner -> Column(Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        FormField("Date", date, { date = it }); FormField("Store / supplier", supplier, { supplier = it }); FormField("Details", details, { details = it }); FormField("Account / category", account, { account = it }); FormField("Gross total (£)", gross, { gross = it }, KeyboardType.Decimal); VatSelector(vatType) { vatType = it }; Text("Net ${formatMoney(b.netPence)} • VAT ${formatMoney(b.vatPence)}", style = MaterialTheme.typography.bodySmall); FormField("Payment method", payment, { payment = it }); FormField("Comments", comments, { comments = it }, singleLine = false); OutlinedButton({ picker.launch("*/*") }, Modifier.fillMaxWidth()) { Icon(Icons.Default.AttachFile, null); Text(if (attachment != null) " Receipt selected" else if (!e?.attachmentPath.isNullOrBlank()) " Replace receipt/invoice" else " Attach receipt/invoice") }; Button({ vm.saveExpense(ExpenseDraft(id, parseDateOrToday(date), supplier, details, account, runCatching { moneyToPence(gross) }.getOrDefault(0), vatType, payment, comments, e?.attachmentPath), attachment) { nav.popBackStack() } }, Modifier.fillMaxWidth()) { Text("Save expense") }; Spacer(Modifier.height(20.dp))
-    } }
+    ScreenScaffold(if (id == 0L) "New expense" else "Edit expense",
+        onBack = { nav.popBackStack() }) { inner ->
+        Column(Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            FormField("Expense date", date, { date = it })
+            FormField("Store / supplier", supplier, { supplier = it })
+            FormField("Details", details, { details = it })
+            FormField("Account / category", account, { account = it })
+            FormField("Order / transaction reference (optional)", reference, { reference = it })
+            FormField("Purchasing email (optional)", email, { email = it })
+            FormField("Gross total (£)", gross, { gross = it }, KeyboardType.Decimal)
+            VatSelector(vatType) { vatType = it }
+            Text("Net " + formatMoney(b.netPence) + " • VAT " + formatMoney(b.vatPence),
+                style = MaterialTheme.typography.bodyMedium)
+            FormField("Payment method", payment, { payment = it })
+            FormField("Comments", comments, { comments = it }, singleLine = false)
+            Button({ picker.launch(arrayOf("application/pdf", "image/png", "image/jpeg")) },
+                Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.AttachFile, null)
+                Text(" Add invoice(s) or receipt(s)")
+            }
+            if (attachments.isNotEmpty()) Text(attachments.size.toString() + " document(s) selected",
+                style = MaterialTheme.typography.bodySmall)
+            if (docs.isNotEmpty()) {
+                Text("Saved invoices (" + docs.size + ")", fontWeight = FontWeight.SemiBold)
+                docs.forEach { doc ->
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(doc.originalFileName.ifBlank { java.io.File(doc.filePath).name },
+                            Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                        TextButton({ preview = doc }) { Text("View") }
+                        IconButton({ remove = doc }) { Icon(Icons.Default.DeleteOutline, "Remove invoice") }
+                    }
+                }
+            }
+            Button({
+                vm.saveExpenseWithInvoices(
+                    ExpenseDraft(id, parseDateOrToday(date), supplier, details, account,
+                        runCatching { moneyToPence(gross) }.getOrDefault(0), vatType,
+                        payment, comments, e?.attachmentPath, reference, email),
+                    attachments
+                ) { nav.popBackStack() }
+            }, Modifier.fillMaxWidth()) { Text("Save expense") }
+            if (id > 0) OutlinedButton({ nav.navigate("invoice-finder/expenses") },
+                Modifier.fillMaxWidth()) { Text("Find expense invoices") }
+            Spacer(Modifier.height(20.dp))
+        }
+    }
+    preview?.let { doc -> InvoiceFilePreview(doc.filePath,
+        doc.originalFileName.ifBlank { java.io.File(doc.filePath).name }) { preview = null } }
+    remove?.let { doc ->
+        AlertDialog(onDismissRequest = { remove = null }, title = { Text("Remove invoice?") },
+            text = { Text("This will not change the expense's VAT or cost.") },
+            confirmButton = { TextButton({
+                vm.deleteExpenseInvoice(doc.id); remove = null
+            }) { Text("Remove") } },
+            dismissButton = { TextButton({ remove = null }) { Text("Cancel") } })
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
