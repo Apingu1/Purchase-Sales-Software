@@ -224,6 +224,11 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
         }
     }
 
+    fun setInvoiceWaived(orderId: Long, waived: Boolean) =
+        action(if (waived) "Invoice waived" else "Invoice waiver removed") {
+            repo.setInvoiceWaived(orderId, waived)
+        }
+
     fun deletePurchaseInvoice(invoiceId: Long) =
         action("Invoice removed") { repo.removePurchaseInvoiceDocument(invoiceId) }
 

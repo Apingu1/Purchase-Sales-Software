@@ -427,6 +427,16 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
     }
 
 
+    /** A waiver changes only document tracking, never financials or email eligibility. */
+    suspend fun setInvoiceWaived(orderId: Long, waived: Boolean) {
+        val order = dao.getPurchaseOrder(orderId) ?: error("Purchase order not found")
+        if (waived) require(dao.getPurchaseInvoices(orderId).isEmpty()) {
+            "This purchase already has an approved invoice"
+        }
+        dao.updatePurchaseOrder(order.copy(invoiceWaived = waived, updatedAtMillis = System.currentTimeMillis()))
+        enqueueSync()
+    }
+
     /** Attach an additional invoice without overwriting other invoices or any purchase financials. */
     suspend fun attachAdditionalPurchaseInvoice(orderId: Long, uri: Uri): Long {
         requireNotNull(dao.getPurchaseOrder(orderId)) { "Purchase order not found" }
@@ -445,7 +455,7 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 }) {
                     "This invoice is already attached to the purchase"
                 }
-                dao.insertPurchaseInvoice(PurchaseInvoiceEntity(
+                val invoiceId = dao.insertPurchaseInvoice(PurchaseInvoiceEntity(
                     purchaseOrderId = orderId,
                     invoiceOrdinal = dao.nextInvoiceOrdinal(orderId),
                     filePath = path,
@@ -454,6 +464,9 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                     sha256 = fingerprint.sha256,
                     byteSize = fingerprint.byteSize
                 ))
+                val refreshed = requireNotNull(dao.getPurchaseOrder(orderId))
+                if (refreshed.invoiceWaived) dao.updatePurchaseOrder(refreshed.copy(invoiceWaived = false))
+                invoiceId
             }
             enqueueSync()
             return id
@@ -524,6 +537,8 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                     sha256 = hash.sha256,
                     byteSize = hash.byteSize
                 ))
+                if (currentOrder.invoiceWaived)
+                    dao.updatePurchaseOrder(currentOrder.copy(invoiceWaived = false))
                 dao.updateInvoiceCandidate(current.copy(
                     status = "APPROVED",
                     reviewedAtMillis = System.currentTimeMillis()
@@ -744,12 +759,9 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 existing != null && existing.customerId == draft.customerId && existing.saleDateEpochDay == draft.dateEpochDay -> existing.invoiceNo
                 else -> generateInvoiceNumber(customer, draft.dateEpochDay)
             }
-            val sameAsExisting = existing?.invoiceNo?.equals(invoiceNo, ignoreCase = true) == true
-            val alreadyReserved = InvoiceNumberPreferences.wasInvoiceNumberUsed(context, invoiceNo)
-            require(
-                dao.getSales().none { it.id != draft.id && it.invoiceNo.equals(invoiceNo, ignoreCase = true) } &&
-                    (sameAsExisting || !alreadyReserved)
-            ) { "Invoice number $invoiceNo has already been used" }
+            require(dao.getSales().none {
+                it.id != draft.id && it.invoiceNo.equals(invoiceNo, ignoreCase = true)
+            }) { "Invoice number $invoiceNo already exists" }
             savedInvoiceNo = invoiceNo
 
             if (existing != null && (existing.invoiceNo != invoiceNo || existing.saleDateEpochDay != draft.dateEpochDay)) {
@@ -794,11 +806,12 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         }
 
         oldDropboxInvoice?.let { (day, invoiceNo) ->
-            InvoiceNumberPreferences.markInvoiceNumberUsed(context, invoiceNo)
             DropboxDeletionQueue.enqueueSale(context, day, invoiceNo)
         }
         oldLocalPdf?.let { File(it).delete() }
-        InvoiceNumberPreferences.markInvoiceNumberUsed(context, savedInvoiceNo)
+        dao.getSale(saleId)?.let {
+            DropboxDeletionQueue.cancelSaleDeletion(context, it.saleDateEpochDay, it.invoiceNo)
+        }
         enqueueSync()
         return saleId
     }
@@ -823,7 +836,6 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
             writableDb.execSQL("DELETE FROM sales WHERE id = ?", arrayOf(saleId))
         }
         sale.pdfPath?.let { File(it).delete() }
-        InvoiceNumberPreferences.markInvoiceNumberUsed(context, sale.invoiceNo)
         DropboxDeletionQueue.enqueueSale(context, sale.saleDateEpochDay, sale.invoiceNo)
         enqueueSync()
     }
@@ -843,10 +855,9 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
         val businessCode = dao.getBusiness()?.invoiceIdentifier?.trim()?.uppercase().orEmpty()
 
         // Continue the customer/day sequence across legacy and business-prefixed invoice formats.
-        // Existing invoices are never renamed, and deleted sales invoice numbers remain reserved.
+        // Existing invoices are never renamed. Erroneously deleted invoices free their sequence.
         val allKnownNumbers = buildSet {
             dao.getSales().forEach { add(it.invoiceNo.trim().uppercase()) }
-            addAll(InvoiceNumberPreferences.usedInvoiceNumbers(context))
         }
         val escapedCustomer = Regex.escape(customerCode)
         val escapedDate = Regex.escape(dateCode)

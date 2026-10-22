@@ -41,6 +41,7 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
     val context = LocalContext.current
     val orders by vm.purchaseOrders.collectAsStateWithLifecycle()
     val docs by vm.purchaseInvoices.collectAsStateWithLifecycle()
+    val purchaseLines by vm.purchases.collectAsStateWithLifecycle()
     val suggestions by vm.pendingInvoiceCandidates.collectAsStateWithLifecycle()
     val accounts by vm.emailAccounts.collectAsStateWithLifecycle()
     val running by vm.finderRunning.collectAsStateWithLifecycle()
@@ -56,9 +57,17 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
         target = null
     }
     val grouped = docs.groupBy { it.purchaseOrderId }
-    val approved = orders.filter { !grouped[it.id].isNullOrEmpty() }
-    val missing = orders.filter { grouped[it.id].isNullOrEmpty() }
-    val orderMap = orders.associateBy { it.id }
+    val linesByOrder = purchaseLines.groupBy { it.purchaseOrderId }
+    val eligible = orders.filter { order ->
+        val lines = linesByOrder[order.id].orEmpty()
+        lines.isNotEmpty() && !lines.all(::isFullyCancelledPurchase)
+    }
+    val orderMap = eligible.associateBy { it.id }
+    val suggestionsForEligible = suggestions.filter { orderMap.containsKey(it.purchaseOrderId) }
+    val awaiting = suggestionsForEligible.map { it.purchaseOrderId }.toSet()
+    val approved = eligible.filter { !grouped[it.id].isNullOrEmpty() }
+    val waived = eligible.filter { grouped[it.id].isNullOrEmpty() && it.invoiceWaived && it.id !in awaiting }
+    val missing = eligible.filter { grouped[it.id].isNullOrEmpty() && !it.invoiceWaived && it.id !in awaiting }
     fun matches(o: PurchaseOrderEntity): Boolean = query.isBlank() ||
         o.supplier.contains(query, true) || o.orderNumber.contains(query, true) ||
         o.accountUsername.contains(query, true)
@@ -75,7 +84,8 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
             ElevatedCard(Modifier.fillMaxWidth().padding(12.dp)) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Purchase invoice centre", fontWeight = FontWeight.SemiBold)
-                    Text(suggestions.size.toString() + " pending  •  " + approved.size + " approved  •  " + missing.size + " missing",
+                    Text(suggestionsForEligible.size.toString() + " pending  •  " + approved.size +
+                            " approved  •  " + missing.size + " missing  •  " + waived.size + " waived",
                         style = MaterialTheme.typography.bodySmall)
                     Button({ vm.runInvoiceFinder() }, modifier = Modifier.fillMaxWidth(),
                         enabled = !running && accounts.any { it.isEnabled && it.connectionState == "CONNECTED" }) {
@@ -87,15 +97,16 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
                     }
                     if (progress.isNotBlank()) Text(progress,
                         style = MaterialTheme.typography.bodySmall)
-                    Text("Search only invoice-less purchases with an order number and their exact connected mailbox. All matches require your approval.",
+                    Text("Search invoice-less purchases, including waived purchases, using their exact connected mailbox. All matches require approval.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) {
-                Tab(tab == 0, { tab = 0 }, text = { Text("Pending Review (" + suggestions.size + ")") })
+                Tab(tab == 0, { tab = 0 }, text = { Text("Pending Review (" + suggestionsForEligible.size + ")") })
                 Tab(tab == 1, { tab = 1 }, text = { Text("Approved (" + approved.size + ")") })
                 Tab(tab == 2, { tab = 2 }, text = { Text("Missing (" + missing.size + ")") })
+                Tab(tab == 3, { tab = 3 }, text = { Text("Waived (" + waived.size + ")") })
             }
             OutlinedTextField(
                 value = query, onValueChange = { query = it },
@@ -107,7 +118,7 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
             )
             when (tab) {
                 0 -> {
-                    val filtered = suggestions.filter { c ->
+                    val filtered = suggestionsForEligible.filter { c ->
                         (orderMap[c.purchaseOrderId]?.let(::matches) == true) ||
                             c.originalFileName.contains(query, true) || c.accountEmail.contains(query, true)
                     }
@@ -123,6 +134,11 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
                                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text(orderMap[c.purchaseOrderId]?.supplier ?: "Purchase unavailable",
                                         fontWeight = FontWeight.SemiBold)
+                                    orderMap[c.purchaseOrderId]?.let { order ->
+                                        Text("Purchase: " + editDate(order.purchaseDateEpochDay) +
+                                            " • " + order.orderNumber.ifBlank { "No order number" },
+                                            style = MaterialTheme.typography.bodySmall)
+                                    }
                                     Text(c.originalFileName)
                                     Text("Mailbox: " + c.accountEmail, style = MaterialTheme.typography.bodySmall)
                                     if (staged == null) {
@@ -167,7 +183,7 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
                         }
                     }
                 }
-                else -> {
+                2 -> {
                     val filtered = missing.filter(::matches)
                     if (filtered.isEmpty()) FinderEmpty("No missing invoices", "All purchases have an approved invoice.")
                     else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp),
@@ -179,7 +195,21 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
                                     ?: "Ready to search when email integration is enabled"
                             }
                             FinderOrderCard(order, label, "Missing",
-                                { nav.navigate("purchase/" + order.id) }, { addInvoice(order.id) })
+                                { nav.navigate("purchase/" + order.id) }, { addInvoice(order.id) },
+                                waive = { vm.setInvoiceWaived(order.id, true) })
+                        }
+                    }
+                }
+                else -> {
+                    val filtered = waived.filter(::matches)
+                    if (filtered.isEmpty()) FinderEmpty("No waived invoices",
+                        "Waived purchases remain eligible for future invoice searches.")
+                    else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(filtered, key = { it.id }) { order ->
+                            FinderOrderCard(order, "Still included in future Invoice Finder searches", "Waived",
+                                { nav.navigate("purchase/" + order.id) }, { addInvoice(order.id) },
+                                undoWaive = { vm.setInvoiceWaived(order.id, false) })
                         }
                     }
                 }
@@ -209,7 +239,8 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
 @Composable
 private fun FinderOrderCard(
     order: PurchaseOrderEntity, detail: String, status: String,
-    open: () -> Unit, add: () -> Unit
+    open: () -> Unit, add: () -> Unit,
+    waive: (() -> Unit)? = null, undoWaive: (() -> Unit)? = null
 ) {
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -227,6 +258,8 @@ private fun FinderOrderCard(
                 OutlinedButton(open) { Text(if (status == "Missing") "Open purchase" else "Manage") }
                 Button(add) { Icon(Icons.Default.AttachFile, null, Modifier.size(16.dp)); Text(" Add invoice") }
             }
+            if (waive != null) OutlinedButton(waive) { Text("Waive invoice") }
+            if (undoWaive != null) OutlinedButton(undoWaive) { Text("Undo waiver") }
         }
     }
 }

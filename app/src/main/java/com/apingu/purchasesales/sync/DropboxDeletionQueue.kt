@@ -36,6 +36,15 @@ object DropboxDeletionQueue {
         prefs.edit().putStringSet(KEY_SALES, values).apply()
     }
 
+    /** Prevent a recreated invoice from being removed by older queued cloud cleanup. */
+    @Synchronized
+    fun cancelSaleDeletion(context: Context, saleDateEpochDay: Long, invoiceNo: String) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val values = prefs.getStringSet(KEY_SALES, emptySet()).orEmpty().toMutableSet()
+        values.remove(encode(PendingSaleInvoiceDeletion(saleDateEpochDay, invoiceNo)))
+        prefs.edit().putStringSet(KEY_SALES, values).apply()
+    }
+
     fun pendingSales(context: Context): List<PendingSaleInvoiceDeletion> {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         return prefs.getStringSet(KEY_SALES, emptySet()).orEmpty().mapNotNull(::decode)

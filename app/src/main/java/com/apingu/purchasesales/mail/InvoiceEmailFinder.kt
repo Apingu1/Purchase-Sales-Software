@@ -6,6 +6,7 @@ import androidx.room.withTransaction
 import com.apingu.purchasesales.data.*
 import com.apingu.purchasesales.util.InvoiceCandidateCache
 import com.apingu.purchasesales.util.InvoiceFinderRules
+import com.apingu.purchasesales.util.isFullyCancelledPurchase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -44,6 +45,10 @@ class InvoiceEmailFinder(private val context: Context, private val db: AppDataba
         // that mailbox's 20–30 purchases and closed before moving to the next.
         orders.sortedBy { it.accountUsername.trim().lowercase(java.util.Locale.ROOT) }
             .forEach { order ->
+            val lines = dao.getPurchasesForOrder(order.id)
+            if (lines.isNotEmpty() && lines.all(::isFullyCancelledPurchase)) {
+                skipped++; return@forEach
+            }
             val blocker = InvoiceFinderRules.blockReason(order, approved, accounts)
             if (blocker != null) { skipped++; return@forEach }
             val mailbox = accounts.first { it.emailAddress.equals(order.accountUsername.trim(), true) }
@@ -88,6 +93,9 @@ class InvoiceEmailFinder(private val context: Context, private val db: AppDataba
                             !current.accountUsername.trim().equals(mailbox.emailAddress, ignoreCase = true)) {
                             return@withTransaction 0L
                         }
+                        val currentLines = dao.getPurchasesForOrder(current.id)
+                        if (currentLines.isNotEmpty() && currentLines.all(::isFullyCancelledPurchase))
+                            return@withTransaction 0L
                         if (InvoiceFinderRules.blockReason(current, dao.getAllPurchaseInvoices(),
                                 dao.getEmailAccounts()) != null) return@withTransaction 0L
                         val candidate = InvoiceCandidateEntity(
