@@ -170,7 +170,19 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     fun saveBusiness(value: BusinessEntity, onSuccess: () -> Unit = {}) = action("Business details saved", onSuccess) { repo.saveBusiness(value) }
     fun saveAccountingPeriod(value: AccountingPeriodEntity, onSuccess: () -> Unit = {}) = action("Accounting period saved", onSuccess) { repo.saveAccountingPeriod(value) }
     fun selectAccountingPeriod(value: AccountingPeriodEntity) = action("Accounting period changed") { repo.selectAccountingPeriod(value.id) }
-    fun deleteAccountingPeriod(value: AccountingPeriodEntity) = action("Accounting period deleted") { repo.deleteAccountingPeriod(value) }
+    fun deleteAccountingPeriod(value: AccountingPeriodEntity, withData: Boolean = false, onSuccess: () -> Unit = {}) =
+        action(if (withData) "Accounting period and transactions deleted (backup saved)" else "Accounting period deleted", onSuccess) {
+            if (withData) repo.deleteAccountingPeriodWithData(value) else repo.deleteAccountingPeriod(value)
+        }
+
+    fun accountingPeriodDeletionPreview(value: AccountingPeriodEntity,
+        onResult: (AccountingPeriodDeletionImpact) -> Unit) {
+        viewModelScope.launch {
+            runCatching { repo.accountingPeriodDeletionImpact(value) }
+                .onSuccess(onResult)
+                .onFailure { _message.value = it.message ?: "Unable to inspect accounting period" }
+        }
+    }
 
     fun saveCustomer(value: CustomerEntity, onSuccess: () -> Unit = {}) = action("Customer saved", onSuccess) { repo.addCustomer(value) }
     fun deleteCustomer(value: CustomerEntity) = action("Customer deleted") { repo.deleteCustomer(value) }

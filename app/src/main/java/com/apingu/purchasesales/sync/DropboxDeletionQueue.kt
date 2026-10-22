@@ -27,6 +27,29 @@ object DropboxDeletionQueue {
     private const val KEY_SALES = "sales_invoice_deletions"
     private const val KEY_PURCHASES = "purchase_invoice_deletions"
     private const val KEY_CREDIT_NOTES = "credit_note_deletions"
+    private const val KEY_PERIODS = "accounting_period_deletions"
+
+    @Synchronized
+    fun enqueuePeriod(context: Context, periodName: String) {
+        val key = periodName.replace(Regex("[^A-Za-z0-9._-]+"), "_")
+            .trim('_').take(64).ifBlank { "Accounting_Period" }
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val values = prefs.getStringSet(KEY_PERIODS, emptySet()).orEmpty().toMutableSet()
+        values += key
+        prefs.edit().putStringSet(KEY_PERIODS, values).apply()
+    }
+
+    fun pendingPeriods(context: Context): Set<String> =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getStringSet(KEY_PERIODS, emptySet()).orEmpty().toSet()
+
+    @Synchronized
+    fun removePeriods(context: Context, names: Set<String>) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val values = prefs.getStringSet(KEY_PERIODS, emptySet()).orEmpty().toMutableSet()
+        values.removeAll(names)
+        prefs.edit().putStringSet(KEY_PERIODS, values).apply()
+    }
 
     @Synchronized
     fun enqueueSale(context: Context, saleDateEpochDay: Long, invoiceNo: String) {

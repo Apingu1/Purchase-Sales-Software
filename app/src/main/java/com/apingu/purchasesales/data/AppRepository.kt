@@ -122,6 +122,11 @@ data class FullData(
     val expenses: List<ExpenseEntity>
 )
 
+data class AccountingPeriodDeletionImpact(
+    val purchaseOrders: Int, val purchases: Int, val sales: Int, val creditNotes: Int,
+    val expenses: Int, val documents: Int, val blockers: List<String>
+)
+
 class AppRepository(private val context: Context, private val db: AppDatabase) {
     private val dao = db.dao()
 
@@ -219,6 +224,153 @@ class AppRepository(private val context: Context, private val db: AppDatabase) {
                 accountingEndEpochDay = period.endEpochDay
             )
         )
+    }
+
+    /** Preview the effect of a development-era period reset before permitting deletion. */
+    suspend fun accountingPeriodDeletionImpact(period: AccountingPeriodEntity): AccountingPeriodDeletionImpact {
+        val start = period.startEpochDay
+        val end = period.endEpochDay
+        val orders = dao.getPurchaseOrders().filter { it.purchaseDateEpochDay in start..end }
+        val purchases = dao.getPurchases().filter { it.purchaseDateEpochDay in start..end }
+        val sales = dao.getSales()
+        val affectedSales = sales.filter { it.saleDateEpochDay in start..end }
+        val saleIds = affectedSales.map { it.id }.toSet()
+        val saleLines = dao.getSaleLines()
+        val saleIdByLine = saleLines.associate { it.id to it.saleId }
+        val allocations = dao.getSaleAllocations()
+        val purchaseIds = purchases.map { it.id }.toSet()
+        val creditNotes = dao.getCreditNotes()
+        val returns = dao.getSaleReturns()
+        val affectedCreditNotes = creditNotes.filter { it.creditDateEpochDay in start..end }
+        val affectedExpenses = dao.getExpenses().filter { it.expenseDateEpochDay in start..end }
+        val blockers = mutableListOf<String>()
+        if (allocations.any { it.purchaseId in purchaseIds &&
+                saleIdByLine[it.saleLineId] !in saleIds })
+            blockers += "Stock purchased in this period was sold in another period. Preserve or reverse those later sales first."
+        if (creditNotes.any { (it.saleId in saleIds) != (it.creditDateEpochDay in start..end) })
+            blockers += "Some credit notes cross this period boundary."
+        if (returns.any { (saleIdByLine[it.saleLineId] in saleIds) !=
+                (it.returnDateEpochDay in start..end) })
+            blockers += "Some customer returns cross this period boundary."
+        val orderIds = orders.map { it.id }.toSet()
+        if (purchases.any { it.purchaseOrderId > 0 && it.purchaseOrderId !in orderIds })
+            blockers += "A purchase line belongs to a purchase order outside this period."
+        if (dao.getPurchases().any { it.purchaseOrderId in orderIds && it.purchaseDateEpochDay !in start..end })
+            blockers += "A purchase order contains lines in another period."
+        val periods = dao.getAccountingPeriods()
+        if (periods.size < 2) blockers += "At least one accounting period must remain."
+        val sanitized = period.name.replace(Regex("[^A-Za-z0-9._-]+"), "_").trim('_').take(64)
+        if (periods.any { it.id != period.id &&
+                it.name.replace(Regex("[^A-Za-z0-9._-]+"), "_").trim('_').take(64) == sanitized })
+            blockers += "Another accounting period uses the same Dropbox folder name."
+        val documents = dao.getAllPurchaseInvoices().count { it.purchaseOrderId in orderIds } +
+            affectedSales.count { !it.pdfPath.isNullOrBlank() } +
+            affectedCreditNotes.count { !it.pdfPath.isNullOrBlank() } +
+            affectedExpenses.count { !it.attachmentPath.isNullOrBlank() }
+        return AccountingPeriodDeletionImpact(orders.size, purchases.size,
+            affectedSales.size, affectedCreditNotes.size, affectedExpenses.size, documents, blockers)
+    }
+
+    /** Deletes linked development data atomically, after a private full database/document backup. */
+    suspend fun deleteAccountingPeriodWithData(period: AccountingPeriodEntity): String {
+        requireNotNull(dao.getAccountingPeriod(period.id)) { "Accounting period no longer exists" }
+        val impact = accountingPeriodDeletionImpact(period)
+        require(impact.blockers.isEmpty()) { impact.blockers.joinToString("\n") }
+        val oldOrders = dao.getPurchaseOrders().filter { it.purchaseDateEpochDay in period.startEpochDay..period.endEpochDay }
+        val orderIds = oldOrders.map { it.id }.toSet()
+        val oldPurchases = dao.getPurchases().filter { it.purchaseDateEpochDay in period.startEpochDay..period.endEpochDay }
+        val oldSales = dao.getSales().filter { it.saleDateEpochDay in period.startEpochDay..period.endEpochDay }
+        val oldCredits = dao.getCreditNotes().filter { it.creditDateEpochDay in period.startEpochDay..period.endEpochDay }
+        val oldExpenses = dao.getExpenses().filter { it.expenseDateEpochDay in period.startEpochDay..period.endEpochDay }
+        val paths = (
+            dao.getAllPurchaseInvoices().filter { it.purchaseOrderId in orderIds }.map { it.filePath } +
+                oldOrders.mapNotNull { it.invoicePath } +
+                oldPurchases.mapNotNull { it.invoicePath } +
+                oldSales.mapNotNull { it.pdfPath } +
+                oldCredits.mapNotNull { it.pdfPath } +
+                oldExpenses.mapNotNull { it.attachmentPath }
+        ).distinct()
+        val backups = File(context.filesDir, "period-reset-backups").apply { mkdirs() }
+        val backup = File(backups, "period_" + period.id + "_" + System.currentTimeMillis()).apply { mkdirs() }
+        try {
+            // Checkpoint WAL before copying the database. Do not proceed without a successful backup.
+            db.openHelper.writableDatabase.query("PRAGMA wal_checkpoint(TRUNCATE)").use { cursor ->
+                require(cursor.moveToFirst() && cursor.getInt(0) == 0) {
+                    "Database is busy; cannot create a safe pre-deletion backup"
+                }
+            }
+            context.getDatabasePath("purchase-sales.db").copyTo(File(backup, "purchase-sales.db"), overwrite = true)
+            val fileBackup = File(backup, "documents").apply { mkdirs() }
+            val manifest = mutableListOf<String>()
+            paths.forEachIndexed { index, path ->
+                val source = File(path)
+                if (source.isFile) {
+                    val name = index.toString() + "_" + source.name
+                    source.copyTo(File(fileBackup, name), overwrite = true)
+                    manifest += name + "\t" + source.absolutePath
+                }
+            }
+            File(backup, "documents-manifest.txt").writeText(manifest.joinToString("\n"))
+        } catch (error: Exception) {
+            backup.deleteRecursively()
+            throw IllegalStateException("Period was not deleted: backup failed: " + (error.message ?: "Unknown error"))
+        }
+        db.withTransaction {
+            val currentImpact = accountingPeriodDeletionImpact(period)
+            require(currentImpact.blockers.isEmpty()) { currentImpact.blockers.joinToString("\n") }
+            val sql = db.openHelper.writableDatabase
+            // Delete dependent children before parents; do not leave phantom stock allocations.
+            sql.execSQL("""DELETE FROM credit_note_imeis WHERE creditNoteId IN
+                (SELECT id FROM credit_notes WHERE creditDateEpochDay BETWEEN ? AND ?)""",
+                arrayOf(period.startEpochDay, period.endEpochDay))
+            sql.execSQL("""DELETE FROM sale_return_allocations WHERE saleReturnId IN
+                (SELECT sr.id FROM sale_returns sr JOIN sale_lines sl ON sl.id = sr.saleLineId
+                  JOIN sales s ON s.id = sl.saleId WHERE s.saleDateEpochDay BETWEEN ? AND ?)""",
+                arrayOf(period.startEpochDay, period.endEpochDay))
+            sql.execSQL("""DELETE FROM sale_returns WHERE saleLineId IN
+                (SELECT sl.id FROM sale_lines sl JOIN sales s ON s.id = sl.saleId
+                  WHERE s.saleDateEpochDay BETWEEN ? AND ?)""",
+                arrayOf(period.startEpochDay, period.endEpochDay))
+            sql.execSQL("DELETE FROM credit_notes WHERE creditDateEpochDay BETWEEN ? AND ?",
+                arrayOf(period.startEpochDay, period.endEpochDay))
+            sql.execSQL("""DELETE FROM sale_allocations WHERE saleLineId IN
+                (SELECT sl.id FROM sale_lines sl JOIN sales s ON s.id = sl.saleId
+                  WHERE s.saleDateEpochDay BETWEEN ? AND ?)""",
+                arrayOf(period.startEpochDay, period.endEpochDay))
+            sql.execSQL("""DELETE FROM sale_lines WHERE saleId IN
+                (SELECT id FROM sales WHERE saleDateEpochDay BETWEEN ? AND ?)""",
+                arrayOf(period.startEpochDay, period.endEpochDay))
+            sql.execSQL("DELETE FROM sales WHERE saleDateEpochDay BETWEEN ? AND ?",
+                arrayOf(period.startEpochDay, period.endEpochDay))
+            sql.execSQL("DELETE FROM purchases WHERE purchaseDateEpochDay BETWEEN ? AND ?",
+                arrayOf(period.startEpochDay, period.endEpochDay))
+            sql.execSQL("DELETE FROM purchase_orders WHERE purchaseDateEpochDay BETWEEN ? AND ?",
+                arrayOf(period.startEpochDay, period.endEpochDay))
+            sql.execSQL("DELETE FROM expenses WHERE expenseDateEpochDay BETWEEN ? AND ?",
+                arrayOf(period.startEpochDay, period.endEpochDay))
+            dao.deleteAccountingPeriod(period)
+            val business = dao.getBusiness() ?: BusinessEntity()
+            if (business.selectedAccountingPeriodId == period.id) {
+                val replacement = dao.getAccountingPeriods().maxByOrNull { it.startEpochDay }
+                    ?: error("A remaining accounting period is required")
+                dao.saveBusiness(business.copy(selectedAccountingPeriodId = replacement.id,
+                    accountingStartEpochDay = replacement.startEpochDay,
+                    accountingEndEpochDay = replacement.endEpochDay))
+            }
+        }
+        // Document cleanup is intentionally deferred until after the database commit and backup.
+        val remainingPaths = buildSet {
+            addAll(dao.getAllPurchaseInvoices().map { it.filePath })
+            addAll(dao.getPurchaseOrders().mapNotNull { it.invoicePath })
+            addAll(dao.getPurchases().mapNotNull { it.invoicePath })
+            addAll(dao.getSales().mapNotNull { it.pdfPath })
+            addAll(dao.getCreditNotes().mapNotNull { it.pdfPath })
+            addAll(dao.getExpenses().mapNotNull { it.attachmentPath })
+        }
+        paths.filterNot { it in remainingPaths }.forEach { File(it).delete() }
+        DropboxDeletionQueue.enqueuePeriod(context, period.name)
+        enqueueSync()
+        return backup.absolutePath
     }
 
     suspend fun deleteAccountingPeriod(value: AccountingPeriodEntity) {

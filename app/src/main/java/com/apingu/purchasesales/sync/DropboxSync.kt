@@ -41,6 +41,13 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
             val inv = buildInventory(purchases, allocations, returnAllocations)
             val root = "/" + business.dropboxRoot.trim().trim('/').ifBlank { "Purchase-Sales-Software" }
 
+            // Period resets remove the former accounting folder as well as local records.
+            val periodDeletes = DropboxDeletionQueue.pendingPeriods(applicationContext)
+            periodDeletes.forEach { folder ->
+                DropboxApi.deleteIfExists(token, "$root/Accounting Periods/$folder")
+            }
+            DropboxDeletionQueue.removePeriods(applicationContext, periodDeletes)
+
             // Apply queued sales-invoice deletions before uploading the current state. This removes
             // stale Dropbox PDFs after local invoice deletion, renumbering or accounting-period moves.
             val pendingSaleDeletes = DropboxDeletionQueue.pendingSales(applicationContext)
