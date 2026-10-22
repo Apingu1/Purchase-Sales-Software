@@ -203,10 +203,8 @@ class InvoiceEmailFinder(private val context: Context, private val db: AppDataba
                         if (id <= 0) return@forEach
                         if (InvoiceCandidateCache.previewFile(context, -id) == null) {
                             if (imap != null) {
-                                // The shared cache isolates expense candidates with negative IDs.
-                                val bytes = imap.fetchAttachment(match)
-                                InvoiceCandidateCache.stage(context, -id, match.mimeType,
-                                    ByteArrayInputStream(bytes))
+                                // Negative IDs isolate expense previews from purchase previews.
+                                imap.stageAttachment(context, -id, match)
                             } else {
                                 val content = when (mailbox.provider) {
                                     "GMAIL" -> gmailAttachment(token, match)
