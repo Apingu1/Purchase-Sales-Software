@@ -47,11 +47,15 @@ object ImeiBarcodeRules {
     // Scanned serials are explicitly labelled in notes; unlabelled free text is untouched.
     private val savedSerialPattern = Regex("(?i)^SERIAL(?: NUMBER)?\\s*[:#-]\\s*([A-Za-z0-9_-]{6,40})$")
 
-    fun existingIdentifiers(notes: String): List<String> =
-        notes.lineSequence().mapNotNull { line ->
-            imeisFromBarcode(line).firstOrNull()
-                ?: savedSerialPattern.matchEntire(line.trim())?.groupValues?.get(1)?.uppercase()
-        }.distinct().toList()
+    fun existingIdentifiers(notes: String): List<String> {
+        val identifiers = mutableListOf<String>()
+        notes.lineSequence().forEach { line ->
+            val imeis = imeisFromBarcode(line)
+            if (imeis.isNotEmpty()) identifiers.addAll(imeis)
+            else savedSerialPattern.matchEntire(line.trim())?.groupValues?.get(1)?.uppercase()?.let(identifiers::add)
+        }
+        return identifiers.distinct()
+    }
 
     /** Replaces previously scanned IDs, preserving ordinary item notes and old free text. */
     fun replaceIdentifiersInNotes(originalNotes: String, scanned: List<String>): String {
