@@ -237,7 +237,7 @@ fun ImeiSelectionOverlay() {
     )
 }
 
-private const val WHATS_NEW_VERSION = "2026-10-22-inventory-expenses-waivers-period-reset-v1"
+private const val WHATS_NEW_VERSION = "2026-10-24-purchase-imei-scanner-v1"
 
 @Composable
 fun WhatsNewNotice() {
@@ -259,7 +259,11 @@ fun WhatsNewNotice() {
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("22 October 2026 update", fontWeight = FontWeight.Bold)
+                Text("24 October 2026 update", fontWeight = FontWeight.Bold)
+                Text("• Scan IMEI barcodes directly while adding or editing purchase items: full-screen camera with scan guide, zoom, torch, camera switch, vibration, multi-scan list and remove controls.")
+                Text("• Only valid 15-digit IMEIs are added by default, avoiding accidental product-barcode scans. Optional serial-number mode and manual entry are available. Apply the scan list to the purchase item before saving.")
+                androidx.compose.material3.HorizontalDivider()
+                Text("Previously added — 22 October 2026", fontWeight = FontWeight.Bold)
                 Text("• Inventory now has In Stock and Pending Receipt tabs, with consolidated item quantities and both gross and net purchase-cost totals.")
                 Text("• Expense management now has its own navigation tab, selected-period totals, categories, VAT calculations, multiple invoice attachments, and an Expense Invoice Finder with mailbox matching and manual review.")
                 Text("• The PDF preview scrolls continuously across all pages of long sales, purchase and expense invoices.")
