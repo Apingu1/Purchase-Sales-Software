@@ -35,6 +35,16 @@ class ImeiBarcodeRulesTest {
             ImeiBarcodeRules.replaceImeisInNotes(current, emptyList()))
     }
 
+    @Test fun scannedSerialCanBeRemovedAndFreeTextIsPreserved() {
+        val notes = "Unlocked phone\\nSERIAL: AB12CD345\\nBoxed"
+        assertEquals(listOf("AB12CD345"), ImeiBarcodeRules.existingIdentifiers(notes))
+        assertEquals("Unlocked phone\\nBoxed",
+            ImeiBarcodeRules.replaceIdentifiersInNotes(notes, emptyList()))
+        assertEquals("Unlocked phone\\nBoxed\\nSERIAL: ZY987654",
+            ImeiBarcodeRules.replaceIdentifiersInNotes(notes, listOf("ZY987654")))
+        assertEquals(emptyList<String>(), ImeiBarcodeRules.fromBarcode("490154203237519", true))
+    }
+
     @Test fun existingImeisFromNotesAreUnique() {
         assertEquals(listOf(valid), ImeiBarcodeRules.existingImeis("$valid\nIMEI: $valid"))
     }
