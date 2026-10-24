@@ -44,33 +44,45 @@ object ImeiBarcodeRules {
     fun existingImeis(notes: String): List<String> =
         notes.lineSequence().flatMap { imeisFromBarcode(it).asSequence() }.distinct().toList()
 
-    // Scanned serials are explicitly labelled in notes; unlabelled free text is untouched.
-    private val savedSerialPattern = Regex("(?i)^SERIAL(?: NUMBER)?\\s*[:#-]\\s*([A-Za-z0-9_-]{6,40})$")
+    // Only serials explicitly labelled in notes are owned by the scanner.
+    private val savedSerialPattern =
+        Regex("(?i)^SERIAL(?: NUMBER)?\\s*[:#-]\\s*([A-Za-z0-9_-]{6,40})(?=$|[^A-Za-z0-9_-])")
 
     fun existingIdentifiers(notes: String): List<String> {
         val identifiers = mutableListOf<String>()
         notes.lineSequence().forEach { line ->
             val imeis = imeisFromBarcode(line)
             if (imeis.isNotEmpty()) identifiers.addAll(imeis)
-            else savedSerialPattern.matchEntire(line.trim())?.groupValues?.get(1)?.uppercase()?.let(identifiers::add)
+            else savedSerialPattern.find(line.trim())?.groupValues?.get(1)?.uppercase()?.let(identifiers::add)
         }
         return identifiers.distinct()
     }
 
-    /** Replaces previously scanned IDs, preserving ordinary item notes and old free text. */
+    /** Strip only scanner-managed identifiers, not accompanying condition notes. */
+    private fun notesWithoutTrackedIdentifier(line: String): String {
+        var rest = line.trim()
+        val serial = savedSerialPattern.find(rest)
+        if (serial != null) rest = rest.removeRange(serial.range)
+
+        imeisFromBarcode(rest).forEach { imei ->
+            // Remove a label when it is directly attached to the matched IMEI.
+            val labelled = Regex("(?i)IMEI(?:\\s*[12])?\\s*[:#-]?\\s*" + Regex.escape(imei))
+            rest = labelled.replace(rest, "").replace(imei, "")
+        }
+        return rest.replace(Regex("\\s{2,}"), " ")
+            .trim(' ', '-', '—', '–', ':', '|', ';', ',')
+    }
+
+    /**
+     * Replaces only scanned IDs. Descriptions on the same line (such as
+     * "IMEI: 490154203237518 — screen scratched") remain readable.
+     */
     fun replaceIdentifiersInNotes(originalNotes: String, scanned: List<String>): String {
-        val retained = originalNotes.lines().map { it.trim() }
-            .filter { it.isNotBlank() && existingIdentifiers(it).isEmpty() }
+        val retained = originalNotes.lines().map(::notesWithoutTrackedIdentifier)
+            .filter { it.isNotBlank() }
         val formatted = scanned.distinct().map {
             if (isValidImei(it)) it else "SERIAL: " + it
         }
         return (retained + formatted).joinToString("\n")
-    }
-
-    /** Only replace recognised IMEIs. Preserve free-text item notes and legacy serials. */
-    fun replaceImeisInNotes(originalNotes: String, scanned: List<String>): String {
-        val retained = originalNotes.lines().map { it.trim() }
-            .filter { it.isNotBlank() && imeisFromBarcode(it).isEmpty() }
-        return (retained + scanned.distinct()).joinToString("\n")
     }
 }
