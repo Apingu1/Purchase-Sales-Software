@@ -37,12 +37,31 @@ object ImeiBarcodeRules {
         if (!allowSerial) return emptyList()
         val candidate = raw.trim().replace(Regex("(?i)^(IMEI|S/N|SN|SERIAL)\\s*[:#-]?\\s*"), "").trim()
         if (!serialPattern.matches(candidate)) return emptyList()
-        if (candidate.all { it.isDigit() } && candidate.length in setOf(8, 12, 13)) return emptyList()
+        if (candidate.all { it.isDigit() } && candidate.length in setOf(8, 12, 13, 15)) return emptyList()
         return listOf(candidate.uppercase())
     }
 
     fun existingImeis(notes: String): List<String> =
         notes.lineSequence().flatMap { imeisFromBarcode(it).asSequence() }.distinct().toList()
+
+    // Scanned serials are explicitly labelled in notes; unlabelled free text is untouched.
+    private val savedSerialPattern = Regex("(?i)^SERIAL(?: NUMBER)?\\s*[:#-]\\s*([A-Za-z0-9_-]{6,40})$")
+
+    fun existingIdentifiers(notes: String): List<String> =
+        notes.lineSequence().mapNotNull { line ->
+            imeisFromBarcode(line).firstOrNull()
+                ?: savedSerialPattern.matchEntire(line.trim())?.groupValues?.get(1)?.uppercase()
+        }.distinct().toList()
+
+    /** Replaces previously scanned IDs, preserving ordinary item notes and old free text. */
+    fun replaceIdentifiersInNotes(originalNotes: String, scanned: List<String>): String {
+        val retained = originalNotes.lines().map { it.trim() }
+            .filter { it.isNotBlank() && existingIdentifiers(it).isEmpty() }
+        val formatted = scanned.distinct().map {
+            if (isValidImei(it)) it else "SERIAL: " + it
+        }
+        return (retained + formatted).joinToString("\n")
+    }
 
     /** Only replace recognised IMEIs. Preserve free-text item notes and legacy serials. */
     fun replaceImeisInNotes(originalNotes: String, scanned: List<String>): String {
