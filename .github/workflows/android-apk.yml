@@ -11,6 +11,7 @@ on:
       - feature/gmail-imap-app-password-outlook
       - feature/sales-preview-delivery-imei-supplier-ux
       - feature/inventory-expenses-waivers-period-reset
+      - feature/purchase-imei-camera-scanner
   pull_request:
     branches:
       - main
