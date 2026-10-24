@@ -457,7 +457,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
     )
     val totalQty = forms.sumOf { it.quantity.toIntOrNull() ?: 0 }
     val extraImeis = forms.any { form ->
-        ImeiBarcodeRules.existingImeis(form.notes).size > (form.quantity.toIntOrNull() ?: 0)
+        ImeiBarcodeRules.existingIdentifiers(form.notes).size > (form.quantity.toIntOrNull() ?: 0)
     }
     val title = when { isDuplicate -> "Duplicate purchase"; id == 0L -> "New purchase"; else -> "Edit purchase" }
 
@@ -466,13 +466,13 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
         val target = forms[scanningItem]
         PurchaseImeiScannerScreen(
             itemName = target.item,
-            initialCodes = ImeiBarcodeRules.existingImeis(target.notes),
+            initialCodes = ImeiBarcodeRules.existingIdentifiers(target.notes),
             codesOnOtherItems = forms.filterIndexed { index, _ -> index != scanningItem }
-                .flatMap { ImeiBarcodeRules.existingImeis(it.notes) }.toSet(),
+                .flatMap { ImeiBarcodeRules.existingIdentifiers(it.notes) }.toSet(),
             onApply = { scanned ->
                 val current = forms[scanningItem]
                 forms[scanningItem] = current.copy(
-                    notes = ImeiBarcodeRules.replaceImeisInNotes(current.notes, scanned)
+                    notes = ImeiBarcodeRules.replaceIdentifiersInNotes(current.notes, scanned)
                 )
                 scanningItem = -1
             },
@@ -540,7 +540,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
             }
 
             if (extraImeis) {
-                Text("There are more scanned IMEIs than purchased units on at least one item. Adjust Quantity or remove the extra scans before saving.",
+                Text("There are more scanned IMEIs / serials than purchased units on at least one item. Adjust Quantity or remove the extra scans before saving.",
                     color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
             Button(
@@ -613,12 +613,12 @@ private fun PurchaseLineCardV3(index: Int, form: PurchaseLineFormV3, vatType: St
                 Spacer(Modifier.width(8.dp))
                 Text("Scan IMEI / serial barcodes")
             }
-            val imeiCount = ImeiBarcodeRules.existingImeis(form.notes).size
+            val imeiCount = ImeiBarcodeRules.existingIdentifiers(form.notes).size
             if (imeiCount > 0) {
-                Text("$imeiCount valid IMEI" + (if (imeiCount == 1) "" else "s") + " attached to this item",
+                Text("$imeiCount IMEI / serial identifier" + (if (imeiCount == 1) "" else "s") + " attached to this item",
                     style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 if (imeiCount != qty) {
-                    Text("Quantity is $qty but there are $imeiCount IMEIs. Use one primary IMEI per phone and update Quantity to match before saving.",
+                    Text("Quantity is $qty but there are $imeiCount scanned identifiers. Use one primary IMEI per phone and update Quantity to match before saving.",
                         style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
             }
