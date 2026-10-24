@@ -66,6 +66,7 @@ private val bottomItemsV3 = listOf(
     BottomItemV3("purchases", "Purchases", Icons.Default.ShoppingCart),
     BottomItemV3("inventory", "Inventory", Icons.Default.Inventory2),
     BottomItemV3("sales", "Sales", Icons.Default.ReceiptLong),
+    BottomItemV3("expenses", "Expenses", Icons.Default.Payments),
     BottomItemV3("more", "More", Icons.Default.MoreHoriz)
 )
 
@@ -117,6 +118,7 @@ private fun AppNavigationV3(nav: NavHostController, vm: AppViewModel) {
             composable("reports") { ReportsScreen(vm, nav) }
             composable("documents") { DocumentsScreen(vm, nav) }
             composable("invoice-finder") { InvoiceFinderScreen(vm, nav) }
+            composable("invoice-finder/expenses") { ExpenseInvoiceFinderScreen(vm, nav) }
             composable("email-accounts") { ConnectedEmailAccountsScreen(vm, nav) }
             composable("invoice-finder/purchase/{id}") {
                 InvoicePurchaseDetailScreen(vm, nav,
@@ -437,6 +439,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
         }
     }
 
+    var scanningItem by remember(sourceOrder?.id, isDuplicate) { mutableIntStateOf(-1) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { attachment = it }
     val deliveryPence = runCatching { moneyToPence(deliveryCharge.ifBlank { "0" }) }.getOrNull()
     val deliveryValid = deliveryPence != null && deliveryPence >= 0
@@ -453,7 +456,30 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
         itemBreakdowns.sumOf { it.reverseVatPence } + deliveryBreakdown.reverseVatPence
     )
     val totalQty = forms.sumOf { it.quantity.toIntOrNull() ?: 0 }
+    val extraImeis = forms.any { form ->
+        ImeiBarcodeRules.existingIdentifiers(form.notes).size > (form.quantity.toIntOrNull() ?: 0)
+    }
     val title = when { isDuplicate -> "Duplicate purchase"; id == 0L -> "New purchase"; else -> "Edit purchase" }
+
+    // Keep the purchase editor's unsaved fields in memory while the scanner is open.
+    if (scanningItem in forms.indices) {
+        val target = forms[scanningItem]
+        PurchaseImeiScannerScreen(
+            itemName = target.item,
+            initialCodes = ImeiBarcodeRules.existingIdentifiers(target.notes),
+            codesOnOtherItems = forms.filterIndexed { index, _ -> index != scanningItem }
+                .flatMap { ImeiBarcodeRules.existingIdentifiers(it.notes) }.toSet(),
+            onApply = { scanned ->
+                val current = forms[scanningItem]
+                forms[scanningItem] = current.copy(
+                    notes = ImeiBarcodeRules.replaceIdentifiersInNotes(current.notes, scanned)
+                )
+                scanningItem = -1
+            },
+            onDismiss = { scanningItem = -1 }
+        )
+        return
+    }
 
     ScreenScaffold(title, onBack = { nav.popBackStack() }) { inner ->
         Column(Modifier.padding(inner).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -477,10 +503,10 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
             HorizontalDivider()
             Text("Items purchased", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             Text("Enter the gross purchase cost for one unit. The app multiplies it by Quantity to calculate the line total, net amount and VAT.", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
-            Text("Item notes follow the allocated stock into the PDF sales invoice. For IMEI/serial-tracked devices, use one item line per device (Qty 1) so the exact identifier follows that unit.", style = MaterialTheme.typography.bodySmall)
+            Text("Use the scan button on each purchase item to capture IMEIs with the camera. Scan the primary IMEI per handset; match the number of devices to Quantity. Item notes and identifiers also follow stock into the sales invoice.", style = MaterialTheme.typography.bodySmall)
 
             forms.forEachIndexed { index, form ->
-                PurchaseLineCardV3(index, form, vatType, forms.size > 1, { forms[index] = it }, { if (forms.size > 1) forms.removeAt(index) })
+                PurchaseLineCardV3(index, form, vatType, forms.size > 1, { forms[index] = it }, { if (forms.size > 1) forms.removeAt(index) }, { scanningItem = index })
             }
 
             OutlinedButton({ forms.add(PurchaseLineFormV3()) }, Modifier.fillMaxWidth()) { Icon(Icons.Default.Add, null); Spacer(Modifier.width(6.dp)); Text("Add another item") }
@@ -513,6 +539,10 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
                 }
             }
 
+            if (extraImeis) {
+                Text("There are more scanned IMEIs / serials than purchased units on at least one item. Adjust Quantity or remove the extra scans before saving.",
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
             Button(
                 onClick = {
                     vm.savePurchaseOrder(
@@ -551,7 +581,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
                     ) { nav.popBackStack() }
                 },
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                enabled = deliveryValid
+                enabled = deliveryValid && !extraImeis
             ) { Icon(Icons.Default.Save, null); Spacer(Modifier.width(6.dp)); Text("Save purchase") }
             Spacer(Modifier.height(20.dp))
         }
@@ -559,7 +589,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
 }
 
 @Composable
-private fun PurchaseLineCardV3(index: Int, form: PurchaseLineFormV3, vatType: String, canDelete: Boolean, onChange: (PurchaseLineFormV3) -> Unit, onDelete: () -> Unit) {
+private fun PurchaseLineCardV3(index: Int, form: PurchaseLineFormV3, vatType: String, canDelete: Boolean, onChange: (PurchaseLineFormV3) -> Unit, onDelete: () -> Unit, onScan: () -> Unit) {
     val qty = form.quantity.toIntOrNull() ?: 0
     val unitGrossPence = runCatching { moneyToPence(form.gross) }.getOrDefault(0)
     val lineGrossPence = unitGrossPence * qty.coerceAtLeast(0).toLong()
@@ -578,6 +608,20 @@ private fun PurchaseLineCardV3(index: Int, form: PurchaseLineFormV3, vatType: St
                 Text("Line gross ${formatMoney(lineGrossPence)} • $qty × ${formatMoney(unitGrossPence)}", style = MaterialTheme.typography.bodySmall)
             }
             FormField("Item notes / IMEI / serial number", form.notes, { onChange(form.copy(notes = it)) }, singleLine = false)
+            OutlinedButton(onClick = onScan, modifier = Modifier.fillMaxWidth()) {
+                Icon(Icons.Default.QrCodeScanner, null)
+                Spacer(Modifier.width(8.dp))
+                Text("Scan IMEI / serial barcodes")
+            }
+            val imeiCount = ImeiBarcodeRules.existingIdentifiers(form.notes).size
+            if (imeiCount > 0) {
+                Text("$imeiCount IMEI / serial identifier" + (if (imeiCount == 1) "" else "s") + " attached to this item",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                if (imeiCount != qty) {
+                    Text("Quantity is $qty but there are $imeiCount scanned identifiers. Use one primary IMEI per phone and update Quantity to match before saving.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+            }
 
             HorizontalDivider()
             Text("Receipt / return / refund tracking", style = MaterialTheme.typography.labelLarge)
@@ -676,30 +720,76 @@ private fun DecimalFieldV3(label: String, value: String, modifier: Modifier, onV
 @Composable
 private fun InventoryScreenV3(vm: AppViewModel) {
     val inv by vm.inventory.collectAsStateWithLifecycle()
+    val pending by vm.pendingInventory.collectAsStateWithLifecycle()
+    var tab by remember { mutableIntStateOf(0) }
+    val available = inv.filter { it.available > 0 }
     ScreenScaffold("Inventory") { inner ->
-        val available = inv.filter { it.available > 0 }
-        if (available.isEmpty()) Box(Modifier.padding(inner).fillMaxSize(), contentAlignment = Alignment.Center) { EmptyState("Received purchase items will appear here") }
-        else LazyColumn(
-            Modifier.padding(inner),
-            contentPadding = PaddingValues(12.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            item {
-                Text(
-                    "Identical item names are automatically consolidated. Ten individually purchased units of the same item appear as one inventory item with Qty 10.",
-                    style = MaterialTheme.typography.bodySmall
-                )
+        Column(Modifier.padding(inner).fillMaxSize()) {
+            TabRow(selectedTabIndex = tab) {
+                Tab(tab == 0, { tab = 0 }, text = { Text("In Stock") })
+                Tab(tab == 1, { tab = 1 }, text = { Text("Pending Receipt") })
             }
-            items(available, key = { it.item.lowercase() }) { row ->
-                ElevatedCard(Modifier.fillMaxWidth()) {
-                    Column(Modifier.padding(16.dp)) {
-                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                            Text(row.item, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
-                            AssistChip(onClick = {}, label = { Text("Qty ${row.available}") })
+            if (tab == 0) {
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    item {
+                        ElevatedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text("Inventory purchase cost · " + available.sumOf { it.available } + " units",
+                                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Text("Gross purchase value  " + formatMoney(available.sumOf { it.inventoryGrossCostPence }),
+                                    style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text("Net purchase value  " + formatMoney(available.sumOf { it.inventoryNetCostPence }),
+                                    style = MaterialTheme.typography.bodyMedium)
+                            }
                         }
-                        Spacer(Modifier.height(6.dp))
-                        Text("Purchased ${row.purchased} • Received ${row.received} • Sold ${row.sold} • Supplier returns ${row.supplierReturned}", style = MaterialTheme.typography.bodySmall)
-                        Text("Inventory net cost ${formatMoney(row.inventoryNetCostPence)}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    if (available.isEmpty()) item { EmptyState("No available inventory") }
+                    items(available, key = { it.item.lowercase() }) { row ->
+                        ElevatedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(row.item, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                    Text("Qty " + row.available, fontWeight = FontWeight.Medium)
+                                }
+                                Text("Gross cost  " + formatMoney(row.inventoryGrossCostPence) +
+                                    "  •  Net cost  " + formatMoney(row.inventoryNetCostPence),
+                                    style = MaterialTheme.typography.bodyMedium)
+                                Text("Purchased " + row.purchased + " • Received " + row.received +
+                                    " • Sold " + row.sold + " • Supplier returns " + row.supplierReturned,
+                                    style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            } else {
+                LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    item {
+                        ElevatedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                                Text("Pending inventory · " + pending.sumOf { it.quantity } + " units",
+                                    style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                                Text("Gross purchase value  " + formatMoney(pending.sumOf { it.grossCostPence }),
+                                    style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
+                                Text("Net purchase value  " + formatMoney(pending.sumOf { it.netCostPence }),
+                                    style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
+                    }
+                    if (pending.isEmpty()) item { EmptyState("No stock awaiting receipt") }
+                    items(pending, key = { it.item.lowercase() }) { row ->
+                        ElevatedCard(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Text(row.item, fontWeight = FontWeight.SemiBold, modifier = Modifier.weight(1f))
+                                    Text("Pending " + row.quantity, fontWeight = FontWeight.Medium)
+                                }
+                                Text("Gross cost  " + formatMoney(row.grossCostPence) +
+                                    "  •  Net cost  " + formatMoney(row.netCostPence),
+                                    style = MaterialTheme.typography.bodyMedium)
+                            }
+                        }
                     }
                 }
             }

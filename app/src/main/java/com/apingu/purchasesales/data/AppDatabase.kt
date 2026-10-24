@@ -66,7 +66,8 @@ data class PurchaseOrderEntity(
     @ColumnInfo(defaultValue = "0") val invoiceSequence: Int = 0,
     @ColumnInfo(defaultValue = "''") val invoiceSupplierKey: String = "",
     // Order-level delivery is a financial charge, never an inventory line.
-    @ColumnInfo(defaultValue = "0") val deliveryGrossPence: Long = 0
+    @ColumnInfo(defaultValue = "0") val deliveryGrossPence: Long = 0,
+    @ColumnInfo(defaultValue = "0") val invoiceWaived: Boolean = false
 )
 
 
@@ -277,7 +278,50 @@ data class ExpenseEntity(
     val paymentMethod: String = "",
     val attachmentPath: String? = null,
     val comments: String = "",
-    val updatedAtMillis: Long = System.currentTimeMillis()
+    val updatedAtMillis: Long = System.currentTimeMillis(),
+    @ColumnInfo(defaultValue = "''") val orderNumber: String = "",
+    @ColumnInfo(defaultValue = "''") val accountUsername: String = "",
+    @ColumnInfo(defaultValue = "0") val invoiceWaived: Boolean = false
+)
+
+@Entity(
+    tableName = "expense_invoices",
+    foreignKeys = [ForeignKey(entity = ExpenseEntity::class, parentColumns = ["id"],
+        childColumns = ["expenseId"], onDelete = ForeignKey.CASCADE)],
+    indices = [Index("expenseId"), Index(value = ["expenseId", "invoiceOrdinal"], unique = true)]
+)
+data class ExpenseInvoiceEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val expenseId: Long,
+    val invoiceOrdinal: Int,
+    val filePath: String,
+    val originalFileName: String = "",
+    val source: String = "MANUAL",
+    val sourceAccountEmail: String = "",
+    val sourceMessageId: String? = null,
+    val sha256: String = "",
+    val byteSize: Long = 0,
+    val approvedAtMillis: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "expense_invoice_candidates",
+    foreignKeys = [ForeignKey(entity = ExpenseEntity::class, parentColumns = ["id"],
+        childColumns = ["expenseId"], onDelete = ForeignKey.CASCADE)],
+    indices = [Index("expenseId"),
+        Index(value = ["expenseId", "accountEmail", "messageId", "attachmentId"], unique = true)]
+)
+data class ExpenseInvoiceCandidateEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val expenseId: Long,
+    val accountEmail: String,
+    val messageId: String,
+    val attachmentId: String,
+    val originalFileName: String,
+    val mimeType: String = "application/pdf",
+    val status: String = "PENDING_REVIEW",
+    val foundAtMillis: Long = System.currentTimeMillis(),
+    val reviewedAtMillis: Long = 0
 )
 
 @Dao
@@ -414,6 +458,32 @@ interface AppDao {
     @Query("SELECT * FROM expenses WHERE id = :id") suspend fun getExpense(id: Long): ExpenseEntity?
     @Insert suspend fun insertExpense(value: ExpenseEntity): Long
     @Update suspend fun updateExpense(value: ExpenseEntity)
+    @Delete suspend fun deleteExpense(value: ExpenseEntity)
+
+    @Query("SELECT * FROM expense_invoices ORDER BY expenseId, invoiceOrdinal, id")
+    fun observeExpenseInvoices(): Flow<List<ExpenseInvoiceEntity>>
+    @Query("SELECT * FROM expense_invoices ORDER BY expenseId, invoiceOrdinal, id")
+    suspend fun getAllExpenseInvoices(): List<ExpenseInvoiceEntity>
+    @Query("SELECT * FROM expense_invoices WHERE expenseId = :expenseId ORDER BY invoiceOrdinal, id")
+    suspend fun getExpenseInvoices(expenseId: Long): List<ExpenseInvoiceEntity>
+    @Query("SELECT * FROM expense_invoices WHERE id = :id")
+    suspend fun getExpenseInvoice(id: Long): ExpenseInvoiceEntity?
+    @Query("SELECT COALESCE(MAX(invoiceOrdinal), 0) + 1 FROM expense_invoices WHERE expenseId = :expenseId")
+    suspend fun nextExpenseInvoiceOrdinal(expenseId: Long): Int
+    @Insert suspend fun insertExpenseInvoice(value: ExpenseInvoiceEntity): Long
+    @Delete suspend fun deleteExpenseInvoice(value: ExpenseInvoiceEntity)
+
+    @Query("SELECT * FROM expense_invoice_candidates WHERE status = 'PENDING_REVIEW' ORDER BY foundAtMillis DESC, id DESC")
+    fun observePendingExpenseInvoiceCandidates(): Flow<List<ExpenseInvoiceCandidateEntity>>
+    @Query("SELECT * FROM expense_invoice_candidates WHERE id = :id")
+    suspend fun getExpenseInvoiceCandidate(id: Long): ExpenseInvoiceCandidateEntity?
+    @Query("SELECT * FROM expense_invoice_candidates WHERE expenseId = :expenseId AND accountEmail = :email AND messageId = :messageId AND attachmentId = :attachmentId LIMIT 1")
+    suspend fun findExpenseInvoiceCandidate(expenseId: Long, email: String, messageId: String, attachmentId: String): ExpenseInvoiceCandidateEntity?
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertExpenseInvoiceCandidate(value: ExpenseInvoiceCandidateEntity): Long
+    @Update suspend fun updateExpenseInvoiceCandidate(value: ExpenseInvoiceCandidateEntity)
+    @Query("DELETE FROM expense_invoice_candidates WHERE expenseId = :expenseId AND status = 'PENDING_REVIEW'")
+    suspend fun clearPendingExpenseInvoiceCandidates(expenseId: Long)
 }
 
 @Database(
@@ -422,9 +492,10 @@ interface AppDao {
         PurchaseOrderEntity::class, PurchaseEntity::class, SaleEntity::class, SaleLineEntity::class,
         SaleAllocationEntity::class, CreditNoteEntity::class, SaleReturnEntity::class, SaleReturnAllocationEntity::class,
         CreditNoteImeiEntity::class, ExpenseEntity::class,
-        PurchaseInvoiceEntity::class, EmailAccountEntity::class, InvoiceCandidateEntity::class
+        PurchaseInvoiceEntity::class, EmailAccountEntity::class, InvoiceCandidateEntity::class,
+        ExpenseInvoiceEntity::class, ExpenseInvoiceCandidateEntity::class
     ],
-    version = 8,
+    version = 10,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -632,10 +703,65 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE purchase_orders ADD COLUMN invoiceWaived INTEGER NOT NULL DEFAULT 0")
+            }
+        }
+
+        private val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE expenses ADD COLUMN orderNumber TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE expenses ADD COLUMN accountUsername TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE expenses ADD COLUMN invoiceWaived INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS expense_invoices (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        expenseId INTEGER NOT NULL,
+                        invoiceOrdinal INTEGER NOT NULL,
+                        filePath TEXT NOT NULL,
+                        originalFileName TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        sourceAccountEmail TEXT NOT NULL,
+                        sourceMessageId TEXT,
+                        sha256 TEXT NOT NULL,
+                        byteSize INTEGER NOT NULL,
+                        approvedAtMillis INTEGER NOT NULL,
+                        FOREIGN KEY(expenseId) REFERENCES expenses(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_expense_invoices_expenseId ON expense_invoices(expenseId)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_expense_invoices_expenseId_invoiceOrdinal ON expense_invoices(expenseId, invoiceOrdinal)")
+                db.execSQL("""
+                    CREATE TABLE IF NOT EXISTS expense_invoice_candidates (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        expenseId INTEGER NOT NULL,
+                        accountEmail TEXT NOT NULL,
+                        messageId TEXT NOT NULL,
+                        attachmentId TEXT NOT NULL,
+                        originalFileName TEXT NOT NULL,
+                        mimeType TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        foundAtMillis INTEGER NOT NULL,
+                        reviewedAtMillis INTEGER NOT NULL,
+                        FOREIGN KEY(expenseId) REFERENCES expenses(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                """.trimIndent())
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_expense_invoice_candidates_expenseId ON expense_invoice_candidates(expenseId)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_expense_invoice_candidates_expenseId_accountEmail_messageId_attachmentId ON expense_invoice_candidates(expenseId, accountEmail, messageId, attachmentId)")
+                db.execSQL("""
+                    INSERT INTO expense_invoices(expenseId, invoiceOrdinal, filePath, originalFileName,
+                        source, sourceAccountEmail, sourceMessageId, sha256, byteSize, approvedAtMillis)
+                    SELECT id, 1, attachmentPath, '', 'LEGACY', '', NULL, '', 0, updatedAtMillis
+                    FROM expenses WHERE attachmentPath IS NOT NULL AND length(trim(attachmentPath)) > 0
+                """.trimIndent())
+            }
+        }
+
         fun create(context: Context): AppDatabase = Room.databaseBuilder(
             context.applicationContext,
             AppDatabase::class.java,
             "purchase-sales.db"
-        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7, MIGRATION_7_8, MIGRATION_8_9, MIGRATION_9_10).build()
     }
 }

@@ -41,6 +41,7 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
     val context = LocalContext.current
     val orders by vm.purchaseOrders.collectAsStateWithLifecycle()
     val docs by vm.purchaseInvoices.collectAsStateWithLifecycle()
+    val purchaseLines by vm.purchases.collectAsStateWithLifecycle()
     val suggestions by vm.pendingInvoiceCandidates.collectAsStateWithLifecycle()
     val accounts by vm.emailAccounts.collectAsStateWithLifecycle()
     val running by vm.finderRunning.collectAsStateWithLifecycle()
@@ -56,9 +57,19 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
         target = null
     }
     val grouped = docs.groupBy { it.purchaseOrderId }
-    val approved = orders.filter { !grouped[it.id].isNullOrEmpty() }
-    val missing = orders.filter { grouped[it.id].isNullOrEmpty() }
-    val orderMap = orders.associateBy { it.id }
+    val linesByOrder = purchaseLines.groupBy { it.purchaseOrderId }
+    val eligible = orders.filter { order ->
+        val lines = linesByOrder[order.id].orEmpty()
+        lines.isNotEmpty() && !isCancelledOrderForInvoiceFinder(lines)
+    }
+    val orderMap = eligible.associateBy { it.id }
+    val suggestionsForEligible = suggestions.filter {
+        orderMap.containsKey(it.purchaseOrderId) && grouped[it.purchaseOrderId].isNullOrEmpty()
+    }
+    val awaiting = suggestionsForEligible.map { it.purchaseOrderId }.toSet()
+    val approved = eligible.filter { !grouped[it.id].isNullOrEmpty() }
+    val waived = eligible.filter { grouped[it.id].isNullOrEmpty() && it.invoiceWaived && it.id !in awaiting }
+    val missing = eligible.filter { grouped[it.id].isNullOrEmpty() && !it.invoiceWaived && it.id !in awaiting }
     fun matches(o: PurchaseOrderEntity): Boolean = query.isBlank() ||
         o.supplier.contains(query, true) || o.orderNumber.contains(query, true) ||
         o.accountUsername.contains(query, true)
@@ -74,8 +85,12 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
         Column(Modifier.padding(insets).fillMaxSize()) {
             ElevatedCard(Modifier.fillMaxWidth().padding(12.dp)) {
                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Purchase invoice centre", fontWeight = FontWeight.SemiBold)
-                    Text(suggestions.size.toString() + " pending  •  " + approved.size + " approved  •  " + missing.size + " missing",
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Purchase invoice centre", Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                        TextButton({ nav.navigate("invoice-finder/expenses") }) { Text("Expenses") }
+                    }
+                    Text(suggestionsForEligible.size.toString() + " pending  •  " + approved.size +
+                            " approved  •  " + missing.size + " missing  •  " + waived.size + " waived",
                         style = MaterialTheme.typography.bodySmall)
                     Button({ vm.runInvoiceFinder() }, modifier = Modifier.fillMaxWidth(),
                         enabled = !running && accounts.any { it.isEnabled && it.connectionState == "CONNECTED" }) {
@@ -87,15 +102,16 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
                     }
                     if (progress.isNotBlank()) Text(progress,
                         style = MaterialTheme.typography.bodySmall)
-                    Text("Search only invoice-less purchases with an order number and their exact connected mailbox. All matches require your approval.",
+                    Text("Search invoice-less purchases, including waived purchases, using their exact connected mailbox. All matches require approval.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
             ScrollableTabRow(selectedTabIndex = tab, edgePadding = 8.dp) {
-                Tab(tab == 0, { tab = 0 }, text = { Text("Pending Review (" + suggestions.size + ")") })
+                Tab(tab == 0, { tab = 0 }, text = { Text("Pending Review (" + suggestionsForEligible.size + ")") })
                 Tab(tab == 1, { tab = 1 }, text = { Text("Approved (" + approved.size + ")") })
                 Tab(tab == 2, { tab = 2 }, text = { Text("Missing (" + missing.size + ")") })
+                Tab(tab == 3, { tab = 3 }, text = { Text("Waived (" + waived.size + ")") })
             }
             OutlinedTextField(
                 value = query, onValueChange = { query = it },
@@ -107,7 +123,7 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
             )
             when (tab) {
                 0 -> {
-                    val filtered = suggestions.filter { c ->
+                    val filtered = suggestionsForEligible.filter { c ->
                         (orderMap[c.purchaseOrderId]?.let(::matches) == true) ||
                             c.originalFileName.contains(query, true) || c.accountEmail.contains(query, true)
                     }
@@ -123,6 +139,11 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
                                 Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text(orderMap[c.purchaseOrderId]?.supplier ?: "Purchase unavailable",
                                         fontWeight = FontWeight.SemiBold)
+                                    orderMap[c.purchaseOrderId]?.let { order ->
+                                        Text("Purchase: " + editDate(order.purchaseDateEpochDay) +
+                                            " • " + order.orderNumber.ifBlank { "No order number" },
+                                            style = MaterialTheme.typography.bodySmall)
+                                    }
                                     Text(c.originalFileName)
                                     Text("Mailbox: " + c.accountEmail, style = MaterialTheme.typography.bodySmall)
                                     if (staged == null) {
@@ -167,7 +188,7 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
                         }
                     }
                 }
-                else -> {
+                2 -> {
                     val filtered = missing.filter(::matches)
                     if (filtered.isEmpty()) FinderEmpty("No missing invoices", "All purchases have an approved invoice.")
                     else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp),
@@ -179,7 +200,21 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
                                     ?: "Ready to search when email integration is enabled"
                             }
                             FinderOrderCard(order, label, "Missing",
-                                { nav.navigate("purchase/" + order.id) }, { addInvoice(order.id) })
+                                { nav.navigate("purchase/" + order.id) }, { addInvoice(order.id) },
+                                waive = { vm.setInvoiceWaived(order.id, true) })
+                        }
+                    }
+                }
+                else -> {
+                    val filtered = waived.filter(::matches)
+                    if (filtered.isEmpty()) FinderEmpty("No waived invoices",
+                        "Waived purchases remain eligible for future invoice searches.")
+                    else LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(filtered, key = { it.id }) { order ->
+                            FinderOrderCard(order, "Still included in future Invoice Finder searches", "Waived",
+                                { nav.navigate("purchase/" + order.id) }, { addInvoice(order.id) },
+                                undoWaive = { vm.setInvoiceWaived(order.id, false) })
                         }
                     }
                 }
@@ -209,7 +244,8 @@ fun InvoiceFinderScreen(vm: AppViewModel, nav: NavHostController) {
 @Composable
 private fun FinderOrderCard(
     order: PurchaseOrderEntity, detail: String, status: String,
-    open: () -> Unit, add: () -> Unit
+    open: () -> Unit, add: () -> Unit,
+    waive: (() -> Unit)? = null, undoWaive: (() -> Unit)? = null
 ) {
     ElevatedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -227,6 +263,8 @@ private fun FinderOrderCard(
                 OutlinedButton(open) { Text(if (status == "Missing") "Open purchase" else "Manage") }
                 Button(add) { Icon(Icons.Default.AttachFile, null, Modifier.size(16.dp)); Text(" Add invoice") }
             }
+            if (waive != null) OutlinedButton(waive) { Text("Waive invoice") }
+            if (undoWaive != null) OutlinedButton(undoWaive) { Text("Undo waiver") }
         }
     }
 }
@@ -324,15 +362,19 @@ private sealed interface PreviewResult {
     data class Failed(val message: String) : PreviewResult
 }
 
-/** On-device PDF/image preview. No external viewer or explicit file download required. */
+/** Continuous, lazily rendered PDF pages shared by sales, purchases and expenses. */
 @Composable
 fun InvoiceFilePreview(path: String, name: String, onClose: () -> Unit) {
-    var page by remember(path) { mutableIntStateOf(0) }
-    val result by produceState<PreviewResult>(PreviewResult.Loading, path, page) {
-        value = PreviewResult.Loading
+    val pageCount by produceState<Int?>(null, path) {
         value = withContext(Dispatchers.IO) {
-            runCatching { renderInvoicePage(File(path), page) }
-                .getOrElse { PreviewResult.Failed(it.message ?: "Unable to open this invoice") }
+            runCatching {
+                val file = File(path)
+                require(file.isFile) { "Invoice file is missing from this device" }
+                if (!file.extension.equals("pdf", true)) 1
+                else ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { fd ->
+                    PdfRenderer(fd).use { it.pageCount }
+                }
+            }.getOrDefault(-1)
         }
     }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false)) {
@@ -343,25 +385,36 @@ fun InvoiceFilePreview(path: String, name: String, onClose: () -> Unit) {
                     IconButton(onClose) { Icon(Icons.Default.Close, "Close preview") }
                 }
                 HorizontalDivider()
-                when (val state = result) {
-                    PreviewResult.Loading -> Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator()
+                when (val count = pageCount) {
+                    null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                    -1, 0 -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text("Unable to open this invoice on this device")
                     }
-                    is PreviewResult.Failed -> Box(Modifier.weight(1f).fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                        Text(state.message)
-                    }
-                    is PreviewResult.Ready -> {
-                        Image(state.bitmap.asImageBitmap(), contentDescription = "Invoice page " + (page + 1),
-                            modifier = Modifier.fillMaxWidth().weight(1f).padding(8.dp),
-                            contentScale = ContentScale.Fit)
-                        if (state.pages > 1) Row(
-                            Modifier.fillMaxWidth().padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            OutlinedButton({ page-- }, enabled = page > 0) { Text("Previous") }
-                            Text((page + 1).toString() + " / " + state.pages)
-                            OutlinedButton({ page++ }, enabled = page < state.pages - 1) { Text("Next") }
+                    else -> LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(count) { page ->
+                            val result by produceState<PreviewResult>(PreviewResult.Loading, path, page) {
+                                value = withContext(Dispatchers.IO) {
+                                    runCatching { renderInvoicePage(File(path), page) }
+                                        .getOrElse { PreviewResult.Failed(it.message ?: "Unable to open page") }
+                                }
+                            }
+                            when (val state = result) {
+                                PreviewResult.Loading -> Box(Modifier.fillMaxWidth().height(160.dp),
+                                    contentAlignment = Alignment.Center) { CircularProgressIndicator() }
+                                is PreviewResult.Failed -> Text(state.message, Modifier.padding(16.dp))
+                                is PreviewResult.Ready -> {
+                                    Column {
+                                        if (count > 1) Text("Page " + (page + 1) + " of " + count,
+                                            style = MaterialTheme.typography.labelSmall)
+                                        Image(state.bitmap.asImageBitmap(),
+                                            contentDescription = "Invoice page " + (page + 1),
+                                            modifier = Modifier.fillMaxWidth().aspectRatio(
+                                                state.bitmap.width.toFloat() / state.bitmap.height.toFloat()),
+                                            contentScale = ContentScale.Fit)
+                                    }
+                                }
+                            }
                         }
                     }
                 }

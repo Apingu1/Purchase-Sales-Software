@@ -38,8 +38,34 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
             val returns = dao.getSaleReturns()
             val returnAllocations = dao.getSaleReturnAllocations()
             val expenses = dao.getExpenses()
+            val expenseInvoices = dao.getAllExpenseInvoices()
             val inv = buildInventory(purchases, allocations, returnAllocations)
             val root = "/" + business.dropboxRoot.trim().trim('/').ifBlank { "Purchase-Sales-Software" }
+
+            // Period resets remove the former accounting folder as well as local records.
+            val periodDeletes = DropboxDeletionQueue.pendingPeriods(applicationContext)
+            periodDeletes.forEach { folder ->
+                DropboxApi.deleteIfExists(token, "$root/Accounting Periods/$folder")
+            }
+            DropboxDeletionQueue.removePeriods(applicationContext, periodDeletes)
+
+            val expenseDeletes = DropboxDeletionQueue.pendingExpenses(applicationContext)
+            val removedExpenseDeletes = mutableSetOf<String>()
+            expenseDeletes.forEach { raw ->
+                val sep = raw.indexOf('\t')
+                if (sep > 0) {
+                    val date = raw.substring(0, sep).toLongOrNull()
+                    val period = periods.firstOrNull {
+                        date != null && date in it.startEpochDay..it.endEpochDay
+                    }
+                    if (period != null) {
+                        DropboxApi.deleteIfExists(token,
+                            "$root/Accounting Periods/${safePeriod(period)}/Expenses/Invoices/${raw.substring(sep + 1)}")
+                        removedExpenseDeletes += raw
+                    }
+                }
+            }
+            DropboxDeletionQueue.removeExpenses(applicationContext, removedExpenseDeletes)
 
             // Apply queued sales-invoice deletions before uploading the current state. This removes
             // stale Dropbox PDFs after local invoice deletion, renumbering or accounting-period moves.
@@ -120,7 +146,8 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
                     allocations,
                     returns,
                     returnAllocations,
-                    expenses
+                    expenses,
+                    orders
                 )
 
                 val xlsx = File(exportDir, "Business_Records_${safePeriod(period)}.xlsx")
@@ -133,7 +160,8 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
                     periodCreditNotes,
                     customers,
                     periodExpenses,
-                    summary
+                    summary,
+                    orders.filter { it.purchaseDateEpochDay in period.startEpochDay..period.endEpochDay }
                 )
                 DropboxApi.upload(token, "$periodRoot/Excel/${xlsx.name}", xlsx.readBytes())
 
@@ -178,6 +206,12 @@ class DropboxSyncWorker(appContext: Context, params: WorkerParameters) : Corouti
                 }
 
                 periodExpenses.forEach { e ->
+                    expenseInvoices.filter { it.expenseId == e.id }.forEach { doc ->
+                        val file = File(doc.filePath)
+                        if (file.isFile) DropboxApi.upload(token,
+                            "$periodRoot/Expenses/Invoices/EXP_${e.id}_${doc.invoiceOrdinal}.${file.extension.ifBlank { "pdf" }}",
+                            file.readBytes())
+                    }
                     e.attachmentPath?.let { path ->
                         val f = File(path)
                         if (f.exists()) DropboxApi.upload(token, "$periodRoot/Expenses/Receipts/EXP_${e.id}_${safe(e.details)}.${f.extension.ifBlank { "bin" }}", f.readBytes())

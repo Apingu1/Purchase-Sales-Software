@@ -237,7 +237,7 @@ fun ImeiSelectionOverlay() {
     )
 }
 
-private const val WHATS_NEW_VERSION = "2026-10-17-sales-preview-delivery-imei-supplier-v1"
+private const val WHATS_NEW_VERSION = "2026-10-24-purchase-imei-scanner-v1"
 
 @Composable
 fun WhatsNewNotice() {
@@ -259,8 +259,20 @@ fun WhatsNewNotice() {
                 Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                Text("17 October 2026 update", fontWeight = FontWeight.Bold)
-                Text("• Sales invoice preview: open generated sales PDFs directly inside the app from the Sales tab, with page navigation. Downloading is still available separately.")
+                Text("24 October 2026 update", fontWeight = FontWeight.Bold)
+                Text("• Scan IMEI barcodes directly while adding or editing purchase items: full-screen camera with scan guide, zoom, torch, camera switch, vibration, multi-scan list and remove controls.")
+                Text("• Only valid 15-digit IMEIs are added by default, avoiding accidental product-barcode scans. Optional serial-number mode and manual entry are available. Apply the scan list to the purchase item before saving.")
+                androidx.compose.material3.HorizontalDivider()
+                Text("Previously added — 22 October 2026", fontWeight = FontWeight.Bold)
+                Text("• Inventory now has In Stock and Pending Receipt tabs, with consolidated item quantities and both gross and net purchase-cost totals.")
+                Text("• Expense management now has its own navigation tab, selected-period totals, categories, VAT calculations, multiple invoice attachments, and an Expense Invoice Finder with mailbox matching and manual review.")
+                Text("• The PDF preview scrolls continuously across all pages of long sales, purchase and expense invoices.")
+                Text("• Invoice Finder shows purchase dates in Pending Review and adds a Waived tab. Waiving needs no reason; waived purchases are searched again, cancelled purchases are excluded and refunded purchases remain eligible.")
+                Text("• Incorrectly deleted sales invoices free their invoice number for reuse when no other sales invoice uses that number.")
+                Text("• Accounting periods can be deleted alone or with eligible related transaction data. Full deletion creates a backup and blocks unsafe cross-period stock/return links.")
+                androidx.compose.material3.HorizontalDivider()
+                Text("Previously added — 17 October 2026", fontWeight = FontWeight.Bold)
+                Text("• Sales invoice preview: open generated sales PDFs directly inside the app from the Sales tab, with a continuously scrollable multi-page preview. Downloading is still available separately.")
                 Text("• Purchase delivery charges: enter a gross delivery amount (default £0.00). Delivery is not inventory; it appears in order totals, dashboard profit/VAT calculations and the purchase Excel/VAT worksheet.")
                 Text("• IMEI picker: select serials from a clean, borderless IMEI / SN, Supplier, Order date table with column headings that stay visible while the device rows scroll.")
                 Text("• Supplier entry: previous-supplier matches now expand inline only when requested, rather than popping over the input after each keystroke.")

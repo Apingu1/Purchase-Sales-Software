@@ -137,6 +137,9 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     val returnAllocations = repo.returnAllocations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val creditNoteImeis = repo.creditNoteImeis.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val expenses = repo.expenses.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val expenseInvoices = repo.expenseInvoices.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val pendingExpenseInvoiceCandidates = repo.pendingExpenseInvoiceCandidates
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val selectedAccountingPeriod = combine(business, accountingPeriods) { b, periods ->
         periods.firstOrNull { it.id == b.selectedAccountingPeriodId }
@@ -144,6 +147,8 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val inventory = combine(purchases, allocations, returnAllocations) { p, a, r -> buildInventory(p, a, r) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val pendingInventory = purchases.map(::buildPendingInventory)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private data class FinancePart(
@@ -168,7 +173,19 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     fun saveBusiness(value: BusinessEntity, onSuccess: () -> Unit = {}) = action("Business details saved", onSuccess) { repo.saveBusiness(value) }
     fun saveAccountingPeriod(value: AccountingPeriodEntity, onSuccess: () -> Unit = {}) = action("Accounting period saved", onSuccess) { repo.saveAccountingPeriod(value) }
     fun selectAccountingPeriod(value: AccountingPeriodEntity) = action("Accounting period changed") { repo.selectAccountingPeriod(value.id) }
-    fun deleteAccountingPeriod(value: AccountingPeriodEntity) = action("Accounting period deleted") { repo.deleteAccountingPeriod(value) }
+    fun deleteAccountingPeriod(value: AccountingPeriodEntity, withData: Boolean = false, onSuccess: () -> Unit = {}) =
+        action(if (withData) "Accounting period and transactions deleted (backup saved)" else "Accounting period deleted", onSuccess) {
+            if (withData) repo.deleteAccountingPeriodWithData(value) else repo.deleteAccountingPeriod(value)
+        }
+
+    fun accountingPeriodDeletionPreview(value: AccountingPeriodEntity,
+        onResult: (AccountingPeriodDeletionImpact) -> Unit) {
+        viewModelScope.launch {
+            runCatching { repo.accountingPeriodDeletionImpact(value) }
+                .onSuccess(onResult)
+                .onFailure { _message.value = it.message ?: "Unable to inspect accounting period" }
+        }
+    }
 
     fun saveCustomer(value: CustomerEntity, onSuccess: () -> Unit = {}) = action("Customer saved", onSuccess) { repo.addCustomer(value) }
     fun deleteCustomer(value: CustomerEntity) = action("Customer deleted") { repo.deleteCustomer(value) }
@@ -221,6 +238,11 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
             }
         }
     }
+
+    fun setInvoiceWaived(orderId: Long, waived: Boolean) =
+        action(if (waived) "Invoice waived" else "Invoice waiver removed") {
+            repo.setInvoiceWaived(orderId, waived)
+        }
 
     fun deletePurchaseInvoice(invoiceId: Long) =
         action("Invoice removed") { repo.removePurchaseInvoiceDocument(invoiceId) }
@@ -538,7 +560,36 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
     }
 
     fun recordReturn(lineId: Long, day: Long, qty: Int, restock: Boolean, notes: String, onSuccess: () -> Unit = {}) = action("Customer return recorded", onSuccess) { repo.recordCustomerReturn(lineId, day, qty, restock, notes) }
-    fun saveExpense(value: ExpenseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) = action("Expense saved", onSuccess) { repo.saveExpense(value, attachmentUri) }
+    fun saveExpense(value: ExpenseDraft, attachmentUri: Uri?, onSuccess: () -> Unit) =
+        action("Expense saved", onSuccess) { repo.saveExpense(value, attachmentUri) }
+
+    fun saveExpenseWithInvoices(value: ExpenseDraft, attachments: List<Uri>, onSuccess: () -> Unit) =
+        action("Expense and invoices saved", onSuccess) {
+            val expenseId = repo.saveExpense(value)
+            attachments.forEach { repo.attachAdditionalExpenseInvoice(expenseId, it) }
+        }
+
+    fun addExpenseInvoices(expenseId: Long, attachments: List<Uri>) =
+        action("Expense invoice(s) attached") {
+            attachments.forEach { repo.attachAdditionalExpenseInvoice(expenseId, it) }
+        }
+
+    fun deleteExpenseInvoice(invoiceId: Long) =
+        action("Expense invoice removed") { repo.removeExpenseInvoice(invoiceId) }
+
+    fun waiveExpenseInvoice(expenseId: Long, waived: Boolean) =
+        action(if (waived) "Expense invoice waived" else "Waiver removed") {
+            repo.setExpenseInvoiceWaived(expenseId, waived)
+        }
+
+    fun approveExpenseInvoice(candidateId: Long) =
+        action("Expense invoice approved") { repo.approveExpenseInvoiceCandidate(candidateId) }
+
+    fun rejectExpenseInvoice(candidateId: Long) =
+        action("Expense invoice suggestion rejected") { repo.rejectExpenseInvoiceCandidate(candidateId) }
+
+    fun deleteExpense(expenseId: Long, onSuccess: () -> Unit = {}) =
+        action("Expense deleted", onSuccess) { repo.deleteExpense(expenseId) }
     fun syncNow() = action("Dropbox sync queued") { repo.enqueueSync() }
 
     fun exportExcel(uri: Uri) = action("Excel workbook exported") {
@@ -563,7 +614,7 @@ class AppViewModel(app: Application, private val repo: AppRepository) : AndroidV
 
     fun exportDocuments(treeUri: Uri) = action("Documents exported") {
         val d = repo.getFullData()
-        val count = DocumentStore.exportAllDocuments(context, treeUri, d.purchases, d.sales, d.creditNotes, d.expenses, dao.getAllPurchaseInvoices(), dao.getPurchaseOrders())
+        val count = DocumentStore.exportAllDocuments(context, treeUri, d.purchases, d.sales, d.creditNotes, d.expenses, dao.getAllPurchaseInvoices(), dao.getPurchaseOrders(), dao.getAllExpenseInvoices())
         _message.value = "$count documents exported"
     }
 

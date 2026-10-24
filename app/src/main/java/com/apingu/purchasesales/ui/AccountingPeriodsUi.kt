@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.apingu.purchasesales.data.AccountingPeriodEntity
+import com.apingu.purchasesales.data.AccountingPeriodDeletionImpact
 import com.apingu.purchasesales.util.displayDate
 import com.apingu.purchasesales.util.editDate
 import com.apingu.purchasesales.util.epochDayToday
@@ -65,6 +66,13 @@ fun AccountingPeriodsManager(vm: AppViewModel) {
     val selected by vm.selectedAccountingPeriod.collectAsStateWithLifecycle()
     var editing by remember { mutableStateOf<AccountingPeriodEntity?>(null) }
     var creating by remember { mutableStateOf(false) }
+    var deleting by remember { mutableStateOf<AccountingPeriodEntity?>(null) }
+    var deleteWithData by remember { mutableStateOf(false) }
+    var impact by remember { mutableStateOf<AccountingPeriodDeletionImpact?>(null) }
+    LaunchedEffect(deleting?.id) {
+        impact = null
+        deleting?.let { vm.accountingPeriodDeletionPreview(it) { preview -> impact = preview } }
+    }
 
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Accounting periods", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
@@ -83,7 +91,7 @@ fun AccountingPeriodsManager(vm: AppViewModel) {
                         if (period.id == selected?.id) Text("Currently selected", style = MaterialTheme.typography.labelSmall)
                     }
                     IconButton({ editing = period }) { Icon(Icons.Default.Edit, "Edit period") }
-                    IconButton({ vm.deleteAccountingPeriod(period) }, enabled = periods.size > 1) { Icon(Icons.Default.DeleteOutline, "Delete period") }
+                    IconButton({ deleteWithData = false; deleting = period }, enabled = periods.size > 1) { Icon(Icons.Default.DeleteOutline, "Delete period") }
                 }
             }
         }
@@ -93,6 +101,49 @@ fun AccountingPeriodsManager(vm: AppViewModel) {
             Spacer(Modifier.width(6.dp))
             Text("Add accounting period")
         }
+    }
+
+    deleting?.let { period ->
+        val details = impact
+        AlertDialog(
+            onDismissRequest = { deleting = null },
+            title = { Text("Delete " + period.name + "?") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp),
+                    modifier = Modifier.verticalScroll(rememberScrollState())) {
+                    Text("Deleting a period definition alone keeps existing transactions.")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = !deleteWithData, onClick = { deleteWithData = false })
+                        Text("Delete period only", modifier = Modifier.weight(1f))
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = deleteWithData, onClick = { deleteWithData = true })
+                        Text("Delete period AND its purchases, sales, expenses and documents",
+                            modifier = Modifier.weight(1f))
+                    }
+                    if (deleteWithData) {
+                        if (details == null) CircularProgressIndicator()
+                        else {
+                            Text("Deletion preview: " + details.purchaseOrders + " purchase orders, " +
+                                details.purchases + " purchase lines, " + details.sales + " sales, " +
+                                details.creditNotes + " credit notes, " + details.expenses +
+                                " expenses and " + details.documents + " documents.")
+                            if (details.blockers.isNotEmpty()) Text(
+                                details.blockers.joinToString("\n"),
+                                color = MaterialTheme.colorScheme.error)
+                            else Text("A private database/document backup is created before data is removed. This operation cannot be undone in the app.")
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = !deleteWithData || (details != null && details.blockers.isEmpty()),
+                    onClick = { vm.deleteAccountingPeriod(period, deleteWithData) { deleting = null } }
+                ) { Text(if (deleteWithData) "Delete data" else "Delete period") }
+            },
+            dismissButton = { TextButton({ deleting = null }) { Text("Cancel") } }
+        )
     }
 
     if (creating) {

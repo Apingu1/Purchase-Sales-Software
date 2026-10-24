@@ -10,11 +10,14 @@ on:
       - feature/mail-oauth-connection-fix
       - feature/gmail-imap-app-password-outlook
       - feature/sales-preview-delivery-imei-supplier-ux
+      - feature/inventory-expenses-waivers-period-reset
+      - feature/purchase-imei-camera-scanner
   pull_request:
     branches:
       - main
       - feature/android-v1-complete
       - feature/gmail-imap-app-password-outlook
+      - feature/sales-preview-delivery-imei-supplier-ux
   workflow_dispatch:
 
 permissions:
