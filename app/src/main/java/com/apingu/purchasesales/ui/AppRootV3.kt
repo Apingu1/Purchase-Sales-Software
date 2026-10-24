@@ -456,6 +456,9 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
         itemBreakdowns.sumOf { it.reverseVatPence } + deliveryBreakdown.reverseVatPence
     )
     val totalQty = forms.sumOf { it.quantity.toIntOrNull() ?: 0 }
+    val extraImeis = forms.any { form ->
+        ImeiBarcodeRules.existingImeis(form.notes).size > (form.quantity.toIntOrNull() ?: 0)
+    }
     val title = when { isDuplicate -> "Duplicate purchase"; id == 0L -> "New purchase"; else -> "Edit purchase" }
 
     // Keep the purchase editor's unsaved fields in memory while the scanner is open.
@@ -536,6 +539,10 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
                 }
             }
 
+            if (extraImeis) {
+                Text("There are more scanned IMEIs than purchased units on at least one item. Adjust Quantity or remove the extra scans before saving.",
+                    color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
             Button(
                 onClick = {
                     vm.savePurchaseOrder(
@@ -574,7 +581,7 @@ private fun PurchaseOrderEditorV3(vm: AppViewModel, nav: NavHostController, id: 
                     ) { nav.popBackStack() }
                 },
                 modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                enabled = deliveryValid
+                enabled = deliveryValid && !extraImeis
             ) { Icon(Icons.Default.Save, null); Spacer(Modifier.width(6.dp)); Text("Save purchase") }
             Spacer(Modifier.height(20.dp))
         }
